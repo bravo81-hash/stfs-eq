@@ -839,24 +839,14 @@ MODAL_JS = """
 const TWS_API = 'http://127.0.0.1:5001';
 let _mdata = null;
 
-async function mOpen(btn) {
+function mOpen(btn) {
   _mdata = JSON.parse(btn.dataset.order);
   mSetStat('', '');
   mTab('sh');
   document.getElementById('m-ticker').textContent = _mdata.ticker;
   document.getElementById('tws-modal').style.display = 'flex';
 
-  mSetStat('Connecting to TWS\u2026', 'busy');
-  try {
-    const r = await fetch(TWS_API + '/api/status');
-    const s = await r.json();
-    if (!s.connected) { mSetStat('TWS not connected \u2014 start TWS and relaunch the app.', 'err'); return; }
-    const sel = document.getElementById('m-acct');
-    sel.innerHTML = s.accounts.map(a => '<option value="' + a + '">' + a + '</option>').join('');
-    mSetStat('', '');
-  } catch(e) { mSetStat('Order server unreachable \u2014 is the launcher running?', 'err'); return; }
-
-  // Shares tab
+  // Populate shares fields immediately from embedded data
   const sh = _mdata.shares;
   document.getElementById('m-sh-entry').value  = sh.entry.toFixed(2);
   document.getElementById('m-sh-stop').value   = sh.stop.toFixed(2);
@@ -872,7 +862,7 @@ async function mOpen(btn) {
     `</tr>`
   ).join('');
 
-  // Options tab
+  // Populate options fields immediately
   const opt = _mdata.options;
   const hasOpt = opt && opt.limit_price > 0;
   const optBtn = document.getElementById('mtab-opt');
@@ -898,6 +888,18 @@ async function mOpen(btn) {
     document.getElementById('m-opt-na').style.display   = '';
     document.getElementById('m-opt-push').style.display = 'none';
   }
+
+  // Fetch TWS accounts asynchronously — fields stay populated even if this fails
+  mSetStat('Connecting to TWS\u2026', 'busy');
+  fetch(TWS_API + '/api/status')
+    .then(r => r.json())
+    .then(s => {
+      if (!s.connected) { mSetStat('TWS not connected \u2014 start TWS and relaunch the launcher.', 'err'); return; }
+      const sel = document.getElementById('m-acct');
+      sel.innerHTML = s.accounts.map(a => `<option value="${a}">${a}</option>`).join('');
+      mSetStat('', '');
+    })
+    .catch(() => mSetStat('Order server unreachable \u2014 open the STFS-EQ launcher first.', 'err'));
 }
 
 function mLegs(opt) {
