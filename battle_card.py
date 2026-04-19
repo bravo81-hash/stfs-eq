@@ -14,6 +14,8 @@ PREREQUISITES:
 """
 
 import argparse
+import html
+import json
 import math
 import os
 import sys
@@ -698,6 +700,277 @@ table.drop td{padding:4px 8px;border-bottom:1px solid var(--border)}
 </style>
 """
 
+# ── TWS order modal — CSS, HTML, JS ──────────────────────────────────────────
+
+MODAL_CSS = """
+.push-tws-btn{background:rgba(0,212,255,.08);color:var(--cyan);
+  border:1px solid var(--cyan);border-radius:4px;padding:6px 14px;
+  font-family:var(--font-body);font-size:11px;font-weight:700;
+  cursor:pointer;letter-spacing:.04em}
+.push-tws-btn:hover{background:rgba(0,212,255,.2)}
+#tws-modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;
+  background:rgba(0,0,0,.78);z-index:9999;align-items:center;justify-content:center}
+.mbox{background:var(--bg1);border:1px solid var(--border2);border-top:3px solid var(--cyan);
+  border-radius:12px;padding:24px;width:510px;max-width:96vw;max-height:92vh;overflow-y:auto}
+.mhdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.mtitle{font-size:15px;font-weight:700;color:var(--cyan);font-family:var(--font-head)}
+.mclose{background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1;padding:0}
+.mclose:hover{color:var(--text)}
+.mtabs{display:flex;gap:6px;margin-bottom:14px}
+.mtab-btn{padding:5px 14px;border-radius:4px;border:1px solid var(--border);
+  background:var(--bg2);color:var(--muted);cursor:pointer;font-size:11px;
+  font-family:var(--font-body);font-weight:700;letter-spacing:.04em}
+.mtab-btn.on{background:var(--cyan);color:#000;border-color:var(--cyan)}
+.mrow{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:12px}
+.mlbl{color:var(--muted);width:76px;flex-shrink:0;font-size:11px}
+.minp{background:var(--bg2);border:1px solid var(--border);color:var(--text);
+  border-radius:4px;padding:4px 8px;font-family:var(--font-body);font-size:12px;width:110px}
+.minp:focus{outline:none;border-color:var(--cyan)}
+.macct{background:var(--bg2);border:1px solid var(--border);color:var(--text);
+  border-radius:4px;padding:5px 8px;font-family:var(--font-body);font-size:12px;
+  width:100%;margin-bottom:14px}
+.macct:focus{outline:none;border-color:var(--cyan)}
+.msz{width:100%;border-collapse:collapse;font-size:11px;margin:6px 0 10px}
+.msz th{padding:3px 6px;color:var(--muted);text-align:left;font-size:9px;
+  text-transform:uppercase;letter-spacing:.06em}
+.msz td{padding:4px 6px;border-bottom:1px solid var(--border)}
+.msz tr:last-child td{border-bottom:none}
+.msz tbody tr:hover td{background:var(--bg2);cursor:pointer}
+.mwarn{background:rgba(255,176,32,.07);border-left:3px solid var(--amber);
+  padding:8px 12px;border-radius:4px;font-size:11px;color:var(--amber);margin:10px 0}
+.mstat{margin-top:10px;padding:8px 12px;border-radius:4px;font-size:11px;display:none}
+.mstat.ok{background:var(--green-bg);color:var(--green);display:block}
+.mstat.err{background:var(--red-bg);color:var(--red);display:block}
+.mstat.busy{background:var(--blue-bg);color:var(--blue);display:block}
+.mfoot{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.mbtn{padding:8px 18px;border-radius:4px;border:none;font-family:var(--font-body);
+  font-size:11px;font-weight:700;cursor:pointer;letter-spacing:.04em}
+.mbtn-cancel{background:var(--bg2);color:var(--muted)}.mbtn-cancel:hover{color:var(--text)}
+.mbtn-push{background:var(--cyan);color:#000}.mbtn-push:hover{background:#00b5d9}
+.mopt-info{background:var(--bg2);border:1px solid var(--border);border-radius:6px;
+  padding:10px 12px;margin-bottom:10px;font-size:12px}
+.mopt-row{display:flex;margin:3px 0}
+.mopt-lbl{color:var(--muted);width:76px;font-size:11px;flex-shrink:0}
+.mopt-val{color:var(--text);font-weight:600}
+"""
+
+MODAL_HTML = """
+<div id="tws-modal">
+ <div class="mbox">
+  <div class="mhdr">
+   <span class="mtitle">&#x1F4E4; Push to TWS &mdash; <span id="m-ticker"></span></span>
+   <button class="mclose" onclick="mClose()">&#x2715;</button>
+  </div>
+
+  <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">TWS Account</div>
+  <select id="m-acct" class="macct"></select>
+
+  <div class="mtabs">
+   <button id="mtab-sh"  class="mtab-btn on" onclick="mTab('sh')">Shares Bracket</button>
+   <button id="mtab-opt" class="mtab-btn"    onclick="mTab('opt')">Options</button>
+  </div>
+
+  <!-- SHARES panel -->
+  <div id="mpanel-sh">
+   <div class="mrow">
+    <span class="mlbl">Entry</span>
+    <input id="m-sh-entry"  class="minp" type="number" step="0.01">
+    <span id="m-sh-etype" style="color:var(--amber);font-size:11px;font-weight:700"></span>
+   </div>
+   <div class="mrow">
+    <span class="mlbl">Stop</span>
+    <input id="m-sh-stop"   class="minp" type="number" step="0.01">
+    <span style="font-size:10px;color:var(--muted)">&minus;2&times;ATR</span>
+   </div>
+   <div class="mrow">
+    <span class="mlbl">Target</span>
+    <input id="m-sh-target" class="minp" type="number" step="0.01">
+    <span style="font-size:10px;color:var(--muted)">+2R</span>
+   </div>
+   <div class="mrow">
+    <span class="mlbl">Shares</span>
+    <input id="m-sh-qty" class="minp" type="number" step="1" min="1">
+    <span style="font-size:10px;color:var(--muted)">&#x2193; click row to fill</span>
+   </div>
+   <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:10px 0 2px">Suggested sizing</div>
+   <table class="msz"><thead><tr><th>Account</th><th>Shares</th><th>Notional</th></tr></thead>
+    <tbody id="m-sh-sz"></tbody></table>
+   <div class="mwarn">&#x26A0; Orders placed as HELD &mdash; right-click parent in TWS &rarr; Transmit to activate bracket.</div>
+   <div class="mfoot">
+    <button class="mbtn mbtn-cancel" onclick="mClose()">Cancel</button>
+    <button class="mbtn mbtn-push"   onclick="mPush('shares')">Push Bracket &rarr;</button>
+   </div>
+  </div>
+
+  <!-- OPTIONS panel -->
+  <div id="mpanel-opt" style="display:none">
+   <div class="mopt-info">
+    <div class="mopt-row"><span class="mopt-lbl">Structure</span><span id="m-opt-struct" class="mopt-val" style="color:var(--cyan)"></span></div>
+    <div class="mopt-row"><span class="mopt-lbl">Expiry</span>   <span id="m-opt-expiry" class="mopt-val"></span></div>
+    <div class="mopt-row"><span class="mopt-lbl">Legs</span>     <span id="m-opt-legs"   class="mopt-val"></span></div>
+   </div>
+   <div class="mrow">
+    <span class="mlbl">Limit $</span>
+    <input id="m-opt-limit" class="minp" type="number" step="0.01">
+    <span style="font-size:10px;color:var(--muted)">net debit / credit</span>
+   </div>
+   <div class="mrow">
+    <span class="mlbl">Contracts</span>
+    <input id="m-opt-qty" class="minp" type="number" step="1" min="1">
+    <span style="font-size:10px;color:var(--muted)">&#x2193; click row to fill</span>
+   </div>
+   <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:10px 0 2px">Suggested sizing</div>
+   <table class="msz"><thead><tr><th>Account</th><th>Contracts</th><th>Structure</th></tr></thead>
+    <tbody id="m-opt-sz"></tbody></table>
+   <div id="m-opt-na" style="display:none;color:var(--muted);font-size:12px;padding:16px 0;text-align:center">No options data for this ticker.</div>
+   <div class="mwarn">&#x26A0; Option order placed as HELD &mdash; manual transmit required in TWS.</div>
+   <div class="mfoot">
+    <button class="mbtn mbtn-cancel" onclick="mClose()">Cancel</button>
+    <button id="m-opt-push" class="mbtn mbtn-push" onclick="mPush('options')">Push Options &rarr;</button>
+   </div>
+  </div>
+
+  <div id="m-status" class="mstat"></div>
+ </div>
+</div>
+"""
+
+MODAL_JS = """
+const TWS_API = 'http://127.0.0.1:5001';
+let _mdata = null;
+
+async function mOpen(btn) {
+  _mdata = JSON.parse(btn.dataset.order);
+  mSetStat('', '');
+  mTab('sh');
+  document.getElementById('m-ticker').textContent = _mdata.ticker;
+  document.getElementById('tws-modal').style.display = 'flex';
+
+  mSetStat('Connecting to TWS\u2026', 'busy');
+  try {
+    const r = await fetch(TWS_API + '/api/status');
+    const s = await r.json();
+    if (!s.connected) { mSetStat('TWS not connected \u2014 start TWS and relaunch the app.', 'err'); return; }
+    const sel = document.getElementById('m-acct');
+    sel.innerHTML = s.accounts.map(a => '<option value="' + a + '">' + a + '</option>').join('');
+    mSetStat('', '');
+  } catch(e) { mSetStat('Order server unreachable \u2014 is the launcher running?', 'err'); return; }
+
+  // Shares tab
+  const sh = _mdata.shares;
+  document.getElementById('m-sh-entry').value  = sh.entry.toFixed(2);
+  document.getElementById('m-sh-stop').value   = sh.stop.toFixed(2);
+  document.getElementById('m-sh-target').value = sh.target.toFixed(2);
+  document.getElementById('m-sh-etype').textContent = sh.entry_type === 'MOO' ? 'MOO' : 'LMT \u00b7 DAY';
+  const firstSh = sh.sizing.find(s => s.shares > 0) || sh.sizing[0];
+  document.getElementById('m-sh-qty').value = firstSh ? firstSh.shares : 1;
+  document.getElementById('m-sh-sz').innerHTML = sh.sizing.map(s =>
+    '<tr onclick="document.getElementById(\'m-sh-qty\').value=' + Math.max(1, s.shares) + '">' +
+    '<td><b>' + s.account + '</b></td>' +
+    '<td>' + (s.shares > 0 ? s.shares + ' sh' : '\u2014') + '</td>' +
+    '<td>' + (s.notional > 0 ? '$' + Math.round(s.notional).toLocaleString() : '\u2014') + '</td>' +
+    '</tr>'
+  ).join('');
+
+  // Options tab
+  const opt = _mdata.options;
+  const hasOpt = opt && opt.limit_price > 0;
+  const optBtn = document.getElementById('mtab-opt');
+  optBtn.style.opacity       = hasOpt ? '1' : '0.35';
+  optBtn.style.pointerEvents = hasOpt ? ''  : 'none';
+  if (hasOpt) {
+    document.getElementById('m-opt-struct').textContent = opt.label;
+    document.getElementById('m-opt-expiry').textContent = opt.expiry + '  (' + opt.dte + 'd)';
+    document.getElementById('m-opt-legs').textContent   = mLegs(opt);
+    document.getElementById('m-opt-limit').value = opt.limit_price.toFixed(2);
+    const firstOpt = opt.sizing.find(s => s.contracts > 0) || opt.sizing[0];
+    document.getElementById('m-opt-qty').value = firstOpt ? Math.max(1, firstOpt.contracts) : 1;
+    document.getElementById('m-opt-sz').innerHTML = opt.sizing.map(s =>
+      '<tr onclick="document.getElementById(\'m-opt-qty\').value=' + Math.max(1, s.contracts) + '">' +
+      '<td><b>' + s.account + '</b></td>' +
+      '<td>' + (s.contracts > 0 ? s.contracts + ' ct' + (s.contracts !== 1 ? 's' : '') : '\u2014') + '</td>' +
+      '<td style="color:' + (s.label !== opt.label ? 'var(--purple)' : 'var(--muted)') + '">' + s.label + '</td>' +
+      '</tr>'
+    ).join('');
+    document.getElementById('m-opt-na').style.display   = 'none';
+    document.getElementById('m-opt-push').style.display = '';
+  } else {
+    document.getElementById('m-opt-na').style.display   = '';
+    document.getElementById('m-opt-push').style.display = 'none';
+  }
+}
+
+function mLegs(opt) {
+  const ls = opt.long_strike, ss = opt.short_strike;
+  if (opt.structure === 'long_call')     return 'Long ' + ls + 'C';
+  if (opt.structure === 'debit_spread')  return 'Long ' + ls + 'C / Short ' + ss + 'C';
+  if (opt.structure === 'credit_spread') return 'Long ' + ls + 'P / Short ' + ss + 'P';
+  if (opt.structure === 'diagonal')      return 'Short ' + ss + 'C (' + opt.dte_front + 'd) / Long ' + ls + 'C (' + opt.dte + 'd)';
+  return '';
+}
+
+function mClose() { document.getElementById('tws-modal').style.display = 'none'; }
+
+function mTab(t) {
+  document.getElementById('mpanel-sh').style.display  = t === 'sh'  ? '' : 'none';
+  document.getElementById('mpanel-opt').style.display = t === 'opt' ? '' : 'none';
+  document.getElementById('mtab-sh').className  = 'mtab-btn' + (t === 'sh'  ? ' on' : '');
+  document.getElementById('mtab-opt').className = 'mtab-btn' + (t === 'opt' ? ' on' : '');
+  mSetStat('', '');
+}
+
+async function mPush(type) {
+  const account = document.getElementById('m-acct').value;
+  if (!account) { mSetStat('Select a TWS account first.', 'err'); return; }
+
+  let payload = { type: type, ticker: _mdata.ticker, account: account };
+
+  if (type === 'shares') {
+    const qty = parseInt(document.getElementById('m-sh-qty').value);
+    if (isNaN(qty) || qty < 1) { mSetStat('Shares must be \u2265 1.', 'err'); return; }
+    payload.shares     = qty;
+    payload.entry      = parseFloat(document.getElementById('m-sh-entry').value);
+    payload.stop       = parseFloat(document.getElementById('m-sh-stop').value);
+    payload.target     = parseFloat(document.getElementById('m-sh-target').value);
+    payload.entry_type = _mdata.shares.entry_type;
+  } else {
+    const qty = parseInt(document.getElementById('m-opt-qty').value);
+    if (isNaN(qty) || qty < 1) { mSetStat('Contracts must be \u2265 1.', 'err'); return; }
+    const opt = _mdata.options;
+    payload.contracts    = qty;
+    payload.structure    = opt.structure;
+    payload.expiry       = opt.expiry;
+    payload.expiry_front = opt.expiry_front;
+    payload.long_strike  = opt.long_strike;
+    payload.short_strike = opt.short_strike;
+    payload.limit_price  = parseFloat(document.getElementById('m-opt-limit').value);
+  }
+
+  mSetStat('Sending to TWS\u2026', 'busy');
+  try {
+    const r = await fetch(TWS_API + '/api/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const res = await r.json();
+    mSetStat((res.ok ? '\u2713 ' : '\u2717 ') + (res.message || res.error), res.ok ? 'ok' : 'err');
+  } catch(e) { mSetStat('\u2717 ' + e.message, 'err'); }
+}
+
+function mSetStat(msg, cls) {
+  const el = document.getElementById('m-status');
+  el.textContent = msg;
+  el.className   = 'mstat' + (cls ? ' ' + cls : '');
+  el.style.display = msg ? 'block' : 'none';
+}
+
+document.getElementById('tws-modal').addEventListener('click', function(e) {
+  if (e.target === this) mClose();
+});
+"""
+
+
 def ivhv_class(iv_hv):
     if iv_hv < C.IV_HV_CHEAP: return "ivhv-cheap", "CHEAP"
     if iv_hv < C.IV_HV_NEUTRAL: return "ivhv-neut", "NEUTRAL"
@@ -838,14 +1111,57 @@ def render_card(r, detailed):
   <div class="fgrid">{fgrid}</div>"""
 
     trade = ""
+    btn   = ""
     if detailed and "u_plan" in r:
         trade = f"""
   <div class="trade-grid">
     {render_underlying_block(r['u_plan'])}
     {render_options_block(r.get('opt'))}
   </div>"""
+        btn = (
+            '\n  <div style="text-align:right;margin-top:10px">'
+            f'<button class="push-tws-btn" data-order="{html.escape(_order_json(r))}"'
+            ' onclick="mOpen(this)">&#x1F4E4; Push to TWS</button></div>'
+        )
 
-    return header + trade + "</div>"
+    return header + trade + btn + "</div>"
+
+
+def _order_json(r: dict) -> str:
+    """Serialise trade plan data for embedding in the HTML button data-order attribute."""
+    u   = r["u_plan"]
+    opt = r.get("opt")
+    data: dict = {
+        "ticker": r["ticker"],
+        "shares": {
+            "entry":      round(u["entry"],  4),
+            "stop":       round(u["stop"],   4),
+            "target":     round(u["target"], 4),
+            "entry_type": "MOO" if u["is_breakout"] else "LMT",
+            "sizing": [
+                {"account": s["account"], "shares": s["shares"], "notional": s["notional"]}
+                for s in u["account_sizing"]
+            ],
+        },
+    }
+    if opt and "ok" in opt:
+        pp = opt["primary"]
+        data["options"] = {
+            "structure":    pp["structure"],
+            "label":        pp["label"],
+            "expiry":       pp["expiry"],
+            "expiry_front": pp.get("expiry_front"),
+            "long_strike":  pp["long_strike"],
+            "short_strike": pp.get("short_strike"),
+            "limit_price":  round(pp.get("net_debit") or pp.get("net_credit") or 0, 4),
+            "dte":          pp["dte"],
+            "dte_front":    pp.get("dte_front"),
+            "sizing": [
+                {"account": s["account"], "contracts": s["contracts"], "label": s["label"]}
+                for s in opt["account_sizing"]
+            ],
+        }
+    return json.dumps(data)
 
 def render_html(ctx):
     regime = ctx["regime"]; ts = ctx["timestamp"]
@@ -1003,11 +1319,16 @@ def render_html(ctx):
 <html><head><meta charset="utf-8">
 <title>STFS-EQ · {regime} · {ts}</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
-{CSS}</head><body><div class="wrap">
+{CSS}
+<style>{MODAL_CSS}</style>
+</head><body><div class="wrap">
 {header}{summary}{positions_html}
 {strong_html}{watch_html}{skip_html}{drop_html}{gate_html}
 <div class="foot">STFS-EQ v2.0 · Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
-</div></body></html>"""
+</div>
+{MODAL_HTML}
+<script>{MODAL_JS}</script>
+</body></html>"""
 
 
 # ============================================================================

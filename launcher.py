@@ -96,6 +96,7 @@ class STFSApp(tk.Tk):
         self._check_python()
         self.after(100, self._center_window)
         self.after(500, self._check_tws)   # first TWS probe shortly after startup
+        threading.Thread(target=self._start_order_server, daemon=True).start()
 
     def _center_window(self):
         self.update_idletasks()
@@ -240,6 +241,16 @@ class STFSApp(tk.Tk):
         tk.Label(self, textvariable=self.status_var, bg=BG1, fg=MUTED,
                  font=("Courier", 10), anchor="w", padx=16, pady=6).pack(
                      fill="x", side="bottom")
+
+    # ── order server ────────────────────────────────────────────────────────
+    def _start_order_server(self):
+        """Start order_server in background (blocks up to 10 s for TWS handshake)."""
+        try:
+            import order_server
+            port = order_server.start()
+            self.after(0, lambda: self._log(f"✓ Order server ready on localhost:{port}\n", "ok"))
+        except Exception as e:
+            self.after(0, lambda: self._log(f"⚠ Order server unavailable: {e}\n", "warn"))
 
     # ── TWS status ──────────────────────────────────────────────────────────
     def _check_tws(self):
