@@ -865,11 +865,11 @@ async function mOpen(btn) {
   const firstSh = sh.sizing.find(s => s.shares > 0) || sh.sizing[0];
   document.getElementById('m-sh-qty').value = firstSh ? firstSh.shares : 1;
   document.getElementById('m-sh-sz').innerHTML = sh.sizing.map(s =>
-    '<tr onclick="document.getElementById(\'m-sh-qty\').value=' + Math.max(1, s.shares) + '">' +
-    '<td><b>' + s.account + '</b></td>' +
-    '<td>' + (s.shares > 0 ? s.shares + ' sh' : '\u2014') + '</td>' +
-    '<td>' + (s.notional > 0 ? '$' + Math.round(s.notional).toLocaleString() : '\u2014') + '</td>' +
-    '</tr>'
+    `<tr onclick="document.getElementById('m-sh-qty').value=${Math.max(1,s.shares)}">` +
+    `<td><b>${s.account}</b></td>` +
+    `<td>${s.shares > 0 ? s.shares + ' sh' : '\u2014'}</td>` +
+    `<td>${s.notional > 0 ? '$' + Math.round(s.notional).toLocaleString() : '\u2014'}</td>` +
+    `</tr>`
   ).join('');
 
   // Options tab
@@ -886,11 +886,11 @@ async function mOpen(btn) {
     const firstOpt = opt.sizing.find(s => s.contracts > 0) || opt.sizing[0];
     document.getElementById('m-opt-qty').value = firstOpt ? Math.max(1, firstOpt.contracts) : 1;
     document.getElementById('m-opt-sz').innerHTML = opt.sizing.map(s =>
-      '<tr onclick="document.getElementById(\'m-opt-qty\').value=' + Math.max(1, s.contracts) + '">' +
-      '<td><b>' + s.account + '</b></td>' +
-      '<td>' + (s.contracts > 0 ? s.contracts + ' ct' + (s.contracts !== 1 ? 's' : '') : '\u2014') + '</td>' +
-      '<td style="color:' + (s.label !== opt.label ? 'var(--purple)' : 'var(--muted)') + '">' + s.label + '</td>' +
-      '</tr>'
+      `<tr onclick="document.getElementById('m-opt-qty').value=${Math.max(1,s.contracts)}">` +
+      `<td><b>${s.account}</b></td>` +
+      `<td>${s.contracts > 0 ? s.contracts + ' ct' + (s.contracts !== 1 ? 's' : '') : '\u2014'}</td>` +
+      `<td style="color:${s.label !== opt.label ? 'var(--purple)' : 'var(--muted)'}">${s.label}</td>` +
+      `</tr>`
     ).join('');
     document.getElementById('m-opt-na').style.display   = 'none';
     document.getElementById('m-opt-push').style.display = '';
