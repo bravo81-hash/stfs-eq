@@ -1,0 +1,19 @@
+# API keys — never commit
+.api_key
+
+# Generated battle cards
+output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Claude Code session data
+.claude/
+
+# Setup archive (source files are the canonical form)
+files.zip
