@@ -33,16 +33,16 @@ RS_LOOKBACK        = 20
 WEEKLY_EMA_FAST    = 10
 WEEKLY_EMA_SLOW    = 30
 BENCHMARK          = "SPY"
-STRONG_SCORE_MIN   = 7       # of 8
+STRONG_SCORE_MIN   = 6       # of 8
 WATCH_SCORE_MIN    = 5
 BREAKOUT_LOOKBACK  = 20      # 20-day high → MOO entry
 
 # =====================================================================
 # UNDERLYING TRADE CONSTRUCTION
 # =====================================================================
-ENTRY_ATR_MULT  = 1.0    # limit entry = close - 1×ATR
-STOP_ATR_MULT   = 2.0    # stop = entry - 2×ATR
-TARGET_ATR_MULT = 2.0    # target = entry + 2×ATR (+2R)
+ENTRY_ATR_MULT  = 1.5    # limit entry = close - 1.5×ATR
+STOP_ATR_MULT   = 2.5    # stop = entry - 2.5×ATR
+TARGET_ATR_MULT = 4.0    # target = entry + 4.0×ATR (+1.6R)
 
 # =====================================================================
 # OPTIONS PARAMETERS
@@ -61,19 +61,18 @@ DTE_CREDIT_SPREAD = 28
 DTE_DIAG_FRONT    = 17   # short leg
 DTE_DIAG_BACK     = 50   # long leg
 
-# Spread widths in dollars
-DEBIT_SPREAD_WIDTH  = 5.0
-CREDIT_SPREAD_WIDTH = 5.0
+# Spread widths (Dynamic via ATR instead of fixed dollar)
+SPREAD_ATR_MULT     = 2.0    # Spread width = 2.0 × ATR
 
 # Profit targets
-LONG_CALL_TARGET_MULT   = 2.0   # 2× debit (100% gain)
-DEBIT_SPREAD_TARGET_MULT = 2.0  # 2× debit
+LONG_CALL_TARGET_MULT   = 2.5   # 2.5× debit (150% gain)
+DEBIT_SPREAD_TARGET_MULT = 2.5  # 2.5× debit (150% gain)
 CREDIT_TARGET_PCT        = 0.50  # close at 50% of max credit
 DIAGONAL_TARGET_MULT     = 1.50  # 1.5× debit (50% gain)
 
 # Options liquidity gates
-OPT_MIN_ATM_OI      = 500    # min open interest at ATM strike
-OPT_MAX_SPREAD_PCT  = 15.0   # max bid-ask as % of mid
+OPT_MIN_ATM_OI      = 100    # min open interest at ATM strike (relaxed)
+OPT_MAX_SPREAD_PCT  = 30.0   # max bid-ask as % of mid (relaxed for off-hours)
 
 # =====================================================================
 # STRUCTURAL GATES — Stage 1
@@ -92,46 +91,54 @@ WATCHLISTS = {
         "XLK", "XLY", "SMH", "QQQ", "IWF",
         # Mega-cap tech
         "MSFT", "NVDA", "AAPL", "AMZN", "META", "AVGO", "GOOGL",
-        # Growth / software
-        "ORCL", "AMD", "CRM", "PANW", "NOW", "NFLX", "UBER", "APP",
+        # Growth / software / semis
+        "ORCL", "AMD", "CRM", "PANW", "NOW", "NFLX", "UBER", "APP", 
+        "CRWD", "DDOG", "NET", "SNOW", "ZS", "MDB", "TEAM", "ADBE", 
+        "INTU", "WDAY", "TTD", "SHOP", "SPOT", "MELI", "ASML", "LRCX", 
+        "KLAC", "AMAT", "MU", "ARM", "QCOM", "TXN", "CDNS", "SNPS", 
+        "PLTR", "FSLR", "ENPH"
     ],
     "LIQUIDITY": [
         # ETFs
         "QQQ", "SMH", "XLK", "ARKK", "IBIT",
         # High-beta / crypto proxies
         "NVDA", "AVGO", "TSLA", "MSTR", "COIN",
-        # Semi + speculative
+        # Semi + Speculative + High Short Interest
         "AMD", "MU", "PLTR", "SQ", "HOOD", "RIOT", "MARA",
+        "AFRM", "RBLX", "UPST", "CVNA", "DKNG", "ROKU", "SOFI", 
+        "TOST", "PINS", "RDDT", "CELH", "CLSK", "HUT", "BITF", "WOLF", "IONQ"
     ],
     "REFLATION": [
         # ETFs
         "XLE", "XLF", "XLI", "XME", "IWM",
         # Energy
-        "XOM", "CVX", "SLB", "HAL",
+        "XOM", "CVX", "SLB", "HAL", "COP", "EOG", "OXY", "MPC", "VLO", "PSX",
         # Banks / financials
-        "JPM", "BAC", "GS", "MS",
+        "JPM", "BAC", "GS", "MS", "WFC", "C", "AXP", "BLK", "BX", "KKR", "APO",
         # Industrials / materials
-        "CAT", "DE", "NUE", "FCX",
+        "CAT", "DE", "NUE", "FCX", "URI", "PCAR", "ETN", "PWR", "GE", 
+        "RTX", "LMT", "GD", "NOC", "BA", "STLD", "AA", "CLF"
     ],
     "NEUTRAL": [
         # ETFs
         "SPY", "IWM", "XLV",
         # Quality / large cap
-        "AAPL", "MSFT", "JPM",
+        "AAPL", "MSFT", "JPM", "WMT", "BRK-B", "JNJ", "PG", "MRK", 
+        "TMO", "DHR", "MCD", "SBUX", "PEP", "KO",
         # Healthcare
-        "UNH", "LLY", "ABBV",
+        "UNH", "LLY", "ABBV", "ABT", "ISRG", "SYK",
         # Consumer / financials
-        "V", "MA", "COST", "HD",
+        "V", "MA", "COST", "HD", "NKE"
     ],
     "RISK_OFF": [
         # Defensive ETFs
         "XLU", "XLP", "XLV", "GLD", "TLT", "SHV",
         # Staples
-        "PG", "KO", "WMT",
+        "PG", "KO", "WMT", "K", "GIS", "CPB", "SJM", "KMB", "CL", "CLX", "CHD",
         # Healthcare
-        "UNH", "JNJ", "MRK",
-        # Utilities
-        "DUK", "NEE", "AWK",
+        "UNH", "JNJ", "MRK", "PFE", "BMY", "GILD", "ABT", "AMGN", "HCA",
+        # Utilities / Gold
+        "DUK", "NEE", "AWK", "ED", "SO", "AEP", "SRE", "XEL", "NEM", "GOLD"
     ],
     "CRASH": [],  # cash only — handled separately
 }

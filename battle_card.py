@@ -167,7 +167,7 @@ def fetch_profile(ticker):
     except Exception:
         return {}
 
-def fetch_daily_ohlc(tickers, lookback_days=300):
+def fetch_daily_ohlc(tickers, lookback_days=1500):
     if not tickers: return {}
 
     # TWS path: try first, patch any missing tickers from yfinance below
@@ -371,10 +371,14 @@ def fetch_options_data(ticker, df):
     Tries TWS first (true IVR + live quotes); falls back to yfinance on failure.
     Returns dict or {"error": ...}. Called ONLY for STRONG BUY candidates.
     """
+    tws_err = None
     if _tws_connected():
         result = _tws_options(ticker, df)
         if result is not None:
-            return result
+            if "error" not in result:
+                return result
+            else:
+                tws_err = result["error"]
     try:
         close = df["Close"]
         price = float(close.iloc[-1])
@@ -400,12 +404,23 @@ def fetch_options_data(ticker, df):
         atm = atm_row(calls_ref, price)
         atm_iv = sf(atm["impliedVolatility"])
         atm_bid, atm_ask = sf(atm["bid"]), sf(atm["ask"])
+        
+        # Fallback for YFinance weekend/off-hours where bid/ask are 0
+        if atm_bid <= 0 and atm_ask <= 0:
+            last = sf(atm.get("lastPrice", 0))
+            if last > 0:
+                atm_bid, atm_ask = last * 0.95, last * 1.05
+                
         atm_mid = (atm_bid + atm_ask) / 2
         spread_pct = (atm_ask - atm_bid) / atm_mid * 100 if atm_mid > 0 else 999
+        
+        # YFinance occasionally returns missing OI; use volume as fallback
         oi = si(atm["openInterest"])
+        if oi == 0:
+            oi = si(atm.get("volume", 0))
 
         # Liquidity gate
-        if oi < C.OPT_MIN_ATM_OI:
+        if 0 < oi < C.OPT_MIN_ATM_OI:
             return {"error": f"low OI ({oi})"}
         if spread_pct > C.OPT_MAX_SPREAD_PCT:
             return {"error": f"wide spread ({spread_pct:.0f}%)"}
@@ -413,6 +428,15 @@ def fetch_options_data(ticker, df):
             return {"error": "no IV data"}
 
         iv_hv = atm_iv / hv30
+
+        # Dynamically compute Options Width using ATR
+        tr1 = df['High'] - df['Low']
+        tr2 = (df['High'] - df['Close'].shift()).abs()
+        tr3 = (df['Low'] - df['Close'].shift()).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        at = tr.rolling(14).mean()
+        atr_val = float(at.iloc[-1])
+        spread_width = atr_val * C.SPREAD_ATR_MULT
 
         # Select primary structure
         if iv_hv < C.IV_HV_CHEAP:
@@ -436,9 +460,9 @@ def fetch_options_data(ticker, df):
         if p_struct == "long_call":
             primary = build_long_call(calls_p, price, dte_p, exp_p)
         elif p_struct == "debit_spread":
-            primary = build_debit_spread(calls_p, price, dte_p, exp_p, C.DEBIT_SPREAD_WIDTH)
+            primary = build_debit_spread(calls_p, price, dte_p, exp_p, spread_width)
         elif p_struct == "credit_spread":
-            primary = build_credit_spread(puts_p, price, dte_p, exp_p, C.CREDIT_SPREAD_WIDTH)
+            primary = build_credit_spread(puts_p, price, dte_p, exp_p, spread_width)
         else:  # diagonal
             exp_f, dte_f = find_expiry(exps, C.DTE_DIAG_FRONT)
             ch_f = t.option_chain(exp_f)
@@ -454,15 +478,15 @@ def fetch_options_data(ticker, df):
             ch_ds = t.option_chain(exp_ds) if exp_ds != exp_p else None
             c_ds = ch_ds.calls if ch_ds else calls_p
             d_ds = dte_ds if ch_ds else dte_p
-            fb1 = build_debit_spread(c_ds, price, d_ds, exp_ds, C.DEBIT_SPREAD_WIDTH)
-            fb2 = build_debit_spread(c_ds, price, d_ds, exp_ds, C.DEBIT_SPREAD_WIDTH / 2)
+            fb1 = build_debit_spread(c_ds, price, d_ds, exp_ds, spread_width)
+            fb2 = build_debit_spread(c_ds, price, d_ds, exp_ds, spread_width / 2)
             if fb1: fallbacks.append(fb1)
             if fb2: fallbacks.append(fb2)
         elif p_struct == "debit_spread":
-            fb = build_debit_spread(calls_p, price, dte_p, exp_p, C.DEBIT_SPREAD_WIDTH / 2)
+            fb = build_debit_spread(calls_p, price, dte_p, exp_p, spread_width / 2)
             if fb: fallbacks.append(fb)
         elif p_struct == "credit_spread":
-            fb = build_credit_spread(puts_p, price, dte_p, exp_p, C.CREDIT_SPREAD_WIDTH / 2)
+            fb = build_credit_spread(puts_p, price, dte_p, exp_p, spread_width / 2)
             if fb: fallbacks.append(fb)
 
         # Size per account
@@ -486,6 +510,93 @@ def fetch_options_data(ticker, df):
 # ============================================================================
 # SCORING
 # ============================================================================
+
+def run_mini_backtest(df, bench_df):
+    if df is None or bench_df is None or len(df) < max(C.EMA_SLOW, C.WEEKLY_EMA_SLOW*5, 50):
+        return {"trades": 0, "wins": 0, "win_rate": 0.0, "compounded": 0.0}
+    
+    hi, lo, cl, vol = df["High"], df["Low"], df["Close"], df["Volume"]
+    op = df["Open"]
+    ef = ema(cl, C.EMA_FAST); em = ema(cl, C.EMA_MID); es = ema(cl, C.EMA_SLOW)
+    hm = hma(cl, C.HMA_LEN)
+    rs = rsi(cl, C.RSI_LEN)
+    at = atr(hi, lo, cl, C.ATR_LEN)
+    _, _, adx_s = adx_dmi(hi, lo, cl, C.ADX_LEN)
+    ob = obv(cl, vol); oe = ema(ob, C.OBV_EMA_LEN)
+    atr_pct = (at / cl) * 100
+
+    f1 = (ef > em) & (em > es)
+    df_weekly = df.resample("W-FRI").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
+    if len(df_weekly) >= C.WEEKLY_EMA_SLOW + 2:
+        wf = ema(df_weekly["Close"], C.WEEKLY_EMA_FAST)
+        ws = ema(df_weekly["Close"], C.WEEKLY_EMA_SLOW)
+        df_weekly["f2"] = (df_weekly["Close"] > ws) & (wf > ws)
+        f2 = df_weekly["f2"].reindex(df.index).ffill().fillna(False)
+    else:
+        f2 = pd.Series(False, index=df.index)
+
+    f3 = hm > hm.shift(1)
+    f4 = (adx_s > C.ADX_THRESHOLD) & (adx_s > adx_s.shift(1)) & (adx_s.shift(1) > adx_s.shift(2))
+    f5 = (rs >= C.RSI_LOWER_BAND) & (rs <= C.RSI_UPPER_BAND)
+
+    tr = cl / cl.shift(C.RS_LOOKBACK) - 1
+    br = bench_df["Close"] / bench_df["Close"].shift(C.RS_LOOKBACK) - 1
+    f6 = tr > br.reindex(df.index).ffill()
+    f7 = (ob > oe) & (ob > ob.shift(C.OBV_SLOPE_LOOKBACK))
+    f8 = (atr_pct >= C.ATR_PCT_MIN) & (atr_pct <= C.ATR_PCT_MAX)
+
+    score = f1.astype(int) + f2.astype(int) + f3.astype(int) + f4.astype(int) + f5.astype(int) + f6.astype(int) + f7.astype(int) + f8.astype(int)
+    trio = f1 & f2 & f8
+    strong_buy = (score >= C.STRONG_SCORE_MIN) & trio
+    is_breakout = (cl >= cl.rolling(C.BREAKOUT_LOOKBACK).max())
+
+    in_trade = False; limit_order_active = False 
+    entry_price = stop_loss = take_profit = p_limit = p_stop_d = p_tar_d = 0.0; pending_brk = False
+    
+    cl_a = cl.values; at_a = at.values; op_a = op.values; hi_a = hi.values; lo_a = lo.values
+    sb_a = strong_buy.values; brk_a = is_breakout.values
+    all_trades = []
+    
+    for i in range(len(df) - 1):
+        if in_trade:
+            if lo_a[i+1] <= stop_loss:
+                all_trades.append((stop_loss - entry_price) / entry_price); in_trade = False
+            elif hi_a[i+1] >= take_profit:
+                all_trades.append((take_profit - entry_price) / entry_price); in_trade = False
+            continue
+            
+        if limit_order_active:
+            if pending_brk:
+                entry_price = op_a[i+1]; stop_loss = entry_price - p_stop_d; take_profit = entry_price + p_tar_d
+                limit_order_active = False; in_trade = True
+                if lo_a[i+1] <= stop_loss:
+                    all_trades.append((stop_loss - entry_price) / entry_price); in_trade = False
+                elif hi_a[i+1] >= take_profit:
+                    all_trades.append((take_profit - entry_price) / entry_price); in_trade = False
+            else:
+                if lo_a[i+1] <= p_limit:
+                    entry_price = p_limit; stop_loss = entry_price - p_stop_d; take_profit = entry_price + p_tar_d
+                    limit_order_active = False; in_trade = True
+                    if lo_a[i+1] <= stop_loss:
+                        all_trades.append((stop_loss - entry_price) / entry_price); in_trade = False
+                else: limit_order_active = False
+
+        if not in_trade and not limit_order_active:
+            if sb_a[i]:
+                pending_brk = brk_a[i]
+                if pending_brk:
+                    p_stop_d = C.STOP_ATR_MULT * at_a[i]; p_tar_d = C.TARGET_ATR_MULT * at_a[i]
+                else:
+                    p_limit = cl_a[i] - (C.ENTRY_ATR_MULT * at_a[i])
+                    p_stop_d = C.STOP_ATR_MULT * at_a[i]; p_tar_d = C.TARGET_ATR_MULT * at_a[i]
+                limit_order_active = True
+
+    wins = sum(1 for t in all_trades if t > 0)
+    total = len(all_trades)
+    wr = (wins / total * 100) if total > 0 else 0.0
+    comp = (((1 + pd.Series(all_trades)).prod() - 1) * 100) if total > 0 else 0.0
+    return {"trades": total, "wins": wins, "win_rate": wr, "compounded": comp}
+
 
 def score_ticker(df, bench_df, is_benchmark=False):
     min_bars = max(C.EMA_SLOW, C.WEEKLY_EMA_SLOW*5, C.RS_LOOKBACK+5, 50)
@@ -544,10 +655,14 @@ def score_ticker(df, bench_df, is_benchmark=False):
     elif score >= C.WATCH_SCORE_MIN and factors["F1 Daily Stack"]: action = "WATCH"
     else: action = "SKIP"
 
+    # Always attach historic backtest result!
+    bt_stats = run_mini_backtest(df, bench_df)
+
     return {"close":c,"atr":a,"atr_pct":float(atr_pct),"rsi":rsi_val,
             "adx":adx_val,"rs_pct":rs_val,"factors":factors,
             "score":int(score),"trio_pass":bool(trio),"action":action,
-            "is_breakout": bool(c>=cl.iloc[-C.BREAKOUT_LOOKBACK:].max())}
+            "is_breakout": bool(c>=cl.iloc[-C.BREAKOUT_LOOKBACK:].max()),
+            "backtest": bt_stats}
 
 
 # ============================================================================
@@ -998,7 +1113,7 @@ def render_underlying_block(u_plan):
   <div class="trow"><span class="tl">Stop</span>
     <span class="tv tv-stop">${p['stop']:.2f} · −{C.STOP_ATR_MULT}×ATR</span></div>
   <div class="trow"><span class="tl">Target</span>
-    <span class="tv tv-target">${p['target']:.2f} · +{int(C.TARGET_ATR_MULT/C.STOP_ATR_MULT)}R</span></div>
+    <span class="tv tv-target">${p['target']:.2f} · +{C.TARGET_ATR_MULT/C.STOP_ATR_MULT:.1f}R</span></div>
   <div class="trow"><span class="tl">Time stop</span>
     <span class="tv">Day 10 MOC</span></div>
   <table class="atbl">
@@ -1097,13 +1212,20 @@ def render_card(r, detailed):
         f'<span class="fmark">{"✓" if ok else "✗"}</span></div>'
         for k,ok in r["factors"].items())
 
+    bt = r.get("backtest", {"trades": 0, "win_rate": 0.0, "compounded": 0.0})
+    if bt["trades"] > 0:
+        bt_col = "var(--green)" if bt["win_rate"] >= 60 else ("var(--amber)" if bt["win_rate"] >= 40 else "var(--red)")
+        bt_html = f"  ·  <span style='color:{bt_col};font-weight:700'>BT: {bt['win_rate']:.1f}% Win ({bt['trades']} trades, {bt['compounded']:.0f}% Ret)</span>"
+    else:
+        bt_html = "  ·  <span style='color:var(--muted)'>BT: N/A</span>"
+
     header = f"""
 <div class="card {cc}">
   <div class="card-hdr">
     <div>
       <span class="ticker">{ticker}</span>
       <span class="tmeta">  {r.get('industry','')}  ·  ${r['close']:.2f}
-        · ATR {r['atr']:.2f} ({r['atr_pct']:.1f}%)  · RSI {r['rsi']:.0f}  · ADX {r['adx']:.0f}</span>
+        · ATR {r['atr']:.2f} ({r['atr_pct']:.1f}%)  · RSI {r['rsi']:.0f}  · ADX {r['adx']:.0f}{bt_html}</span>
     </div>
     <div>
       <span class="spill {sc}">Score {score}/8</span>

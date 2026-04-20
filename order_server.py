@@ -26,6 +26,12 @@ _executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)  # serialises a
 def _connect_ib() -> bool:
     global _ib
     try:
+        import asyncio
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
+            
         from ib_insync import IB
         ib = IB()
         ib.connect(TWS_HOST, TWS_PORT, clientId=TWS_CLIENT, timeout=5, readonly=False)
