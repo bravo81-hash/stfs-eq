@@ -428,7 +428,7 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
             return None
         stock = qualified[0]
 
-        # 52-week historical IV series → min/max range for IV Rank denominator
+        # 52-week daily series → min/max range for IV Rank denominator
         iv_bars = _ib.reqHistoricalData(
             stock,
             endDateTime="",
@@ -445,18 +445,34 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
             iv_vals = [b.close for b in iv_bars if b.close and b.close > 0]
             if iv_vals:
                 lo_iv, hi_iv = min(iv_vals), max(iv_vals)
-                # Prefer a live IV snapshot (generic tick 106) so IVR matches
-                # what TWS watchlist shows; fall back to last historical bar.
+
+                # Current IV via 5-min intraday bars.
+                # The 365-day daily bar for *today* is often not yet finalized
+                # at or shortly after the 16:00 ET close, so iv_vals[-1] is
+                # yesterday's value — causing IVR to read ~20 pts below TWS.
+                # The last 5-min bar ending at 16:00 ET is settled immediately.
+                # reqMktData tick-106 also fails post-close (options not trading).
                 try:
-                    snap = _ib.reqMktData(stock, "106", snapshot=True)
-                    _ib.sleep(2)
-                    live_iv = snap.impliedVolatility
-                    if live_iv and live_iv > 0:
-                        current_iv = live_iv
-                    else:
-                        current_iv = iv_vals[-1]
+                    intra = _ib.reqHistoricalData(
+                        stock,
+                        endDateTime="",
+                        durationStr="7200 S",   # last 2 hours of 5-min bars
+                        barSizeSetting="5 mins",
+                        whatToShow="OPTION_IMPLIED_VOLATILITY",
+                        useRTH=True,
+                        formatDate=1,
+                        keepUpToDate=False,
+                    )
+                    if intra:
+                        intra_vals = [b.close for b in intra if b.close and b.close > 0]
+                        if intra_vals:
+                            current_iv = intra_vals[-1]
                 except Exception:
-                    current_iv = iv_vals[-1]
+                    pass
+
+                if current_iv is None:
+                    current_iv = iv_vals[-1]   # last daily bar as fallback
+
                 if hi_iv > lo_iv:
                     ivr = (current_iv - lo_iv) / (hi_iv - lo_iv) * 100
 
