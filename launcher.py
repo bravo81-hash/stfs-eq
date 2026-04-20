@@ -62,7 +62,7 @@ def find_latest_card(regime=None):
 
 def find_python():
     """Find the best available Python 3 with yfinance installed."""
-    candidates = ["python3.11", "python3.12", "python3.10", "python3"]
+    candidates = [sys.executable, "python3.11", "python3.12", "python3.10", "python3"]
     for py in candidates:
         try:
             result = subprocess.run(
@@ -181,6 +181,33 @@ class STFSApp(tk.Tk):
             btn.grid(row=row, column=col, padx=4, pady=4, sticky="nsew")
             self.regime_buttons[key] = btn
             reg_frame.columnconfigure(col, weight=1)
+
+        # ── divider ──────────────────────────────────────────────────────────
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=16, pady=8)
+
+        # ── individual backtest ──────────────────────────────────────────────
+        tk.Label(self, text="INDIVIDUAL BACKTEST", bg=BG, fg=MUTED,
+                 font=("Courier", 10)).pack(anchor="w", padx=16)
+
+        bt_frame = tk.Frame(self, bg=BG)
+        bt_frame.pack(fill="x", padx=16, pady=6)
+        
+        tk.Label(bt_frame, text="Ticker(s):", bg=BG, fg=MUTED, font=("Courier", 10)).pack(side="left")
+        self.bt_tickers_var = tk.StringVar()
+        self.bt_tickers_entry = tk.Entry(bt_frame, textvariable=self.bt_tickers_var, width=18, bg=BG2, fg=TEXT, insertbackground=TEXT, bd=0, highlightthickness=1, highlightcolor=BORDER, highlightbackground=BORDER, font=("Courier", 12))
+        self.bt_tickers_entry.pack(side="left", padx=(4, 12), ipady=5)
+        
+        tk.Label(bt_frame, text="Days:", bg=BG, fg=MUTED, font=("Courier", 10)).pack(side="left")
+        self.bt_days_var = tk.StringVar(value="1500")
+        self.bt_days_entry = tk.Entry(bt_frame, textvariable=self.bt_days_var, width=5, bg=BG2, fg=TEXT, insertbackground=TEXT, bd=0, highlightthickness=1, highlightcolor=BORDER, highlightbackground=BORDER, font=("Courier", 12))
+        self.bt_days_entry.pack(side="left", padx=(4, 12), ipady=5)
+        
+        self.bt_run_btn = tk.Button(
+            bt_frame, text="▶ RUN BACKTEST", command=self._run_backtest,
+            bg=BG2, fg=TEXT, font=("Courier", 10, "bold"), bd=0, cursor="hand2", padx=12, pady=4,
+            activebackground=BG3, activeforeground=TEXT, relief="flat"
+        )
+        self.bt_run_btn.pack(side="left")
 
         # ── divider ──────────────────────────────────────────────────────────
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=16, pady=8)
@@ -403,6 +430,77 @@ class STFSApp(tk.Tk):
             self.status_var.set(f"Opening: {card.name}")
         else:
             self._log("No battle card found. Generate one first.\n", "warn")
+
+    def _run_backtest(self):
+        if self.running:
+            return
+        tickers_str = self.bt_tickers_var.get().strip()
+        if not tickers_str:
+            self._log("Enter at least one ticker to backtest.\n", "warn")
+            return
+            
+        days_str = self.bt_days_var.get().strip()
+        try:
+            days = int(days_str)
+        except ValueError:
+            self._log("Invalid lookback days. Using 1500.\n", "warn")
+            days = 1500
+            
+        if not self.python_exe:
+            self._log("Python environment not ready. See message above.\n", "err")
+            return
+            
+        BACKTEST_SCRIPT = SCRIPT_DIR / "backtest.py"
+        if not BACKTEST_SCRIPT.exists():
+            self._log(f"backtest.py not found at:\n  {BACKTEST_SCRIPT}\n", "err")
+            return
+
+        tickers_list = tickers_str.split()
+
+        self.running = True
+        self.bt_run_btn.config(state="disabled", text="⏳ RUNNING...", bg=MUTED)
+        self.status_var.set(f"Running backtest for {', '.join(tickers_list)}...")
+        self._clear_log()
+        self._log(f"▶  BACKTEST: {', '.join(tickers_list)} ({days} days)\n\n", "info")
+
+        env = os.environ.copy()
+        key = self.api_key_var.get().strip()
+        if key: env["FINNHUB_API_KEY"] = key
+
+        def worker():
+            try:
+                cmd = [self.python_exe, str(BACKTEST_SCRIPT)] + tickers_list + ["--days", str(days)]
+                proc = subprocess.Popen(
+                    cmd, cwd=str(SCRIPT_DIR), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, env=env, bufsize=1
+                )
+                for line in proc.stdout:
+                    line_s = line.strip()
+                    if "Net Return" in line_s or "Avg Win" in line_s:
+                        self.after(0, lambda l=line: self._log(l, "ok"))
+                    elif "WinRate:" in line_s and not ("0.0%" in line_s):
+                        self.after(0, lambda l=line: self._log(l, "ok"))
+                    elif "Losses" in line_s or "Avg Loss" in line_s:
+                        self.after(0, lambda l=line: self._log(l, "warn"))
+                    elif "Error" in line_s or "Insufficient" in line_s or "No trades" in line_s:
+                        self.after(0, lambda l=line: self._log(l, "err"))
+                    elif "=====" in line_s or "SUMMARY" in line_s:
+                        self.after(0, lambda l=line: self._log(l, "info"))
+                    else:
+                        self.after(0, lambda l=line: self._log(l))
+                proc.wait()
+                self.after(0, lambda: self._on_backtest_done())
+            except Exception as e:
+                self.after(0, lambda: self._log(f"\n✗ Error: {e}\n", "err"))
+                self.after(0, lambda: self._on_backtest_done())
+
+        threading.Thread(target=worker, daemon=True).start()
+        
+    def _on_backtest_done(self):
+        self.running = False
+        self.bt_run_btn.config(state="normal", text="▶ RUN BACKTEST", bg=BG2)
+        self.status_var.set("✓ Backtest complete")
+        self._log("\n✓ Done.\n", "ok")
 
 
 # ── entry point ─────────────────────────────────────────────────────────────

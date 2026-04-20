@@ -17,9 +17,12 @@ echo "║   STFS-EQ  One-Time Setup                ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 
-# 1. Find Python 3.11
-echo "▸ Looking for Python 3.11..."
-if command -v python3.11 &>/dev/null; then
+# 1. Find Python 3
+echo "▸ Looking for Python 3..."
+if [ -x "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3" ]; then
+    PY="/Library/Frameworks/Python.framework/Versions/3.13/bin/python3"
+    echo "  ✓ Found Python 3.13 Framework"
+elif command -v python3.11 &>/dev/null; then
     PY="python3.11"
     echo "  ✓ Found: $PY"
 else

@@ -25,6 +25,9 @@ TWS_PORT        = 7496
 TWS_CLIENT      = 15     # change if another client is already using 15
 CONNECT_TIMEOUT = 5      # seconds
 
+# yfinance uses hyphens; TWS requires spaces for some tickers
+_TWS_TICKER = {"BRK-B": "BRK B", "BRK-A": "BRK A"}
+
 
 def _try_connect() -> bool:
     global _ib, _connected
@@ -282,9 +285,21 @@ def _fetch_chain_df(ticker: str, exp_tws: str, right: str,
         if td.modelGreeks and hasattr(td.modelGreeks, "impliedVol"):
             iv = _sf(td.modelGreeks.impliedVol)
         oi_attr = "callOpenInterest" if right == "C" else "putOpenInterest"
+        vol_attr = "callVolume" if right == "C" else "putVolume"
+        
         oi = _si(getattr(td, oi_attr, 0) or 0)
+        if oi <= 0:
+            oi = _si(getattr(td, vol_attr, 0) or 0)
+            
         bid = _sf(td.bid) if (td.bid is not None and td.bid > 0) else 0.0
         ask = _sf(td.ask) if (td.ask is not None and td.ask > 0) else 0.0
+        
+        if bid <= 0 and ask <= 0:
+            last = _sf(td.close) if (td.close is not None and td.close > 0) else 0.0
+            if last <= 0:
+                last = _sf(td.last) if (td.last is not None and td.last > 0) else 0.0
+            if last > 0:
+                bid, ask = last * 0.95, last * 1.05
         rows.append({
             "strike":            float(contract.strike),
             "bid":               bid,
@@ -317,7 +332,8 @@ def get_ohlc(tickers: list, lookback_days: int = 300) -> "dict | None":
     out = {}
     for ticker in tickers:
         try:
-            contract = Stock(ticker, "SMART", "USD")
+            tws_sym = _TWS_TICKER.get(ticker, ticker)
+            contract = Stock(tws_sym, "SMART", "USD")
             bars = _ib.reqHistoricalData(
                 contract,
                 endDateTime="",
@@ -394,9 +410,19 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
         hv30 = float(log_ret.tail(30).std() * np.sqrt(252))
         if hv30 <= 0:
             return {"error": "HV30 = 0"}
+            
+        # Dynamically compute Options Width using ATR
+        tr1 = df['High'] - df['Low']
+        tr2 = (df['High'] - df['Close'].shift()).abs()
+        tr3 = (df['Low'] - df['Close'].shift()).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        at = tr.rolling(14).mean()
+        atr_val = float(at.iloc[-1])
+        spread_width = atr_val * C.SPREAD_ATR_MULT
 
         # Qualify stock contract (needed for conId in reqSecDefOptParams)
-        stock = Stock(ticker, "SMART", "USD")
+        tws_sym = _TWS_TICKER.get(ticker, ticker)
+        stock = Stock(tws_sym, "SMART", "USD")
         qualified = _ib.qualifyContracts(stock)
         if not qualified:
             return None
@@ -453,7 +479,8 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
                       if atm_mid > 0 else 999)
         oi = _si(atm["openInterest"])
 
-        if oi < C.OPT_MIN_ATM_OI:
+        # Liquidity gate - only fail if we get a positive but horribly low OI
+        if 0 < oi < C.OPT_MIN_ATM_OI:
             return {"error": f"low OI ({oi})"}
         if spread_pct > C.OPT_MAX_SPREAD_PCT:
             return {"error": f"wide spread ({spread_pct:.0f}%)"}
@@ -498,15 +525,13 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
             primary = _build_long_call(calls_p, price, dte_p, exp_p_iso)
 
         elif p_struct == "debit_spread":
-            primary = _build_debit_spread(calls_p, price, dte_p, exp_p_iso,
-                                          C.DEBIT_SPREAD_WIDTH)
+            primary = _build_debit_spread(calls_p, price, dte_p, exp_p_iso, spread_width)
 
         elif p_struct == "credit_spread":
             puts_p = _fetch_chain_df(ticker, exp_p_tws, "P", all_strikes, price)
             if puts_p is None or puts_p.empty:
                 return None
-            primary = _build_credit_spread(puts_p, price, dte_p, exp_p_iso,
-                                           C.CREDIT_SPREAD_WIDTH)
+            primary = _build_credit_spread(puts_p, price, dte_p, exp_p_iso, spread_width)
 
         else:  # diagonal
             exp_f_tws, exp_f_iso, dte_f = _find_expiry(tws_exps, C.DTE_DIAG_FRONT)
@@ -526,17 +551,17 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
             c_ds = (calls_p if exp_ds_tws == exp_p_tws else
                     _fetch_chain_df(ticker, exp_ds_tws, "C", all_strikes, price))
             if c_ds is not None:
-                fb1 = _build_debit_spread(c_ds, price, dte_ds, exp_ds_iso, C.DEBIT_SPREAD_WIDTH)
-                fb2 = _build_debit_spread(c_ds, price, dte_ds, exp_ds_iso, C.DEBIT_SPREAD_WIDTH / 2)
+                fb1 = _build_debit_spread(c_ds, price, dte_ds, exp_ds_iso, spread_width)
+                fb2 = _build_debit_spread(c_ds, price, dte_ds, exp_ds_iso, spread_width / 2)
                 if fb1: fallbacks.append(fb1)
                 if fb2: fallbacks.append(fb2)
 
         elif p_struct == "debit_spread":
-            fb = _build_debit_spread(calls_p, price, dte_p, exp_p_iso, C.DEBIT_SPREAD_WIDTH / 2)
+            fb = _build_debit_spread(calls_p, price, dte_p, exp_p_iso, spread_width / 2)
             if fb: fallbacks.append(fb)
 
         elif p_struct == "credit_spread":
-            fb = _build_credit_spread(puts_p, price, dte_p, exp_p_iso, C.CREDIT_SPREAD_WIDTH / 2)
+            fb = _build_credit_spread(puts_p, price, dte_p, exp_p_iso, spread_width / 2)
             if fb: fallbacks.append(fb)
 
         account_sizing = [_size_options_account(primary, fallbacks, acc) for acc in C.ACCOUNTS]
