@@ -444,8 +444,6 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
         if iv_bars and len(iv_bars) >= 30:
             iv_vals = [b.close for b in iv_bars if b.close and b.close > 0]
             if iv_vals:
-                lo_iv, hi_iv = min(iv_vals), max(iv_vals)
-
                 # Current IV via 5-min intraday bars.
                 # The 365-day daily bar for *today* is often not yet finalized
                 # at or shortly after the 16:00 ET close, so iv_vals[-1] is
@@ -473,8 +471,11 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
                 if current_iv is None:
                     current_iv = iv_vals[-1]   # last daily bar as fallback
 
-                if hi_iv > lo_iv:
-                    ivr = (current_iv - lo_iv) / (hi_iv - lo_iv) * 100
+                # IV Percentile: % of past trading days where IV < today's.
+                # TWS 52IVR uses percentile, not min-max rank. Rank compresses
+                # when occasional spikes pull the max up (e.g. WMT rank=42 vs
+                # percentile=60). Percentile matches TWS watchlist exactly.
+                ivr = sum(1 for v in iv_vals if v < current_iv) / len(iv_vals) * 100
 
         # Options chain structure: available expirations + strikes
         chains = _ib.reqSecDefOptParams(ticker, "", "STK", stock.conId)
