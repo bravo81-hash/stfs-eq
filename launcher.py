@@ -377,7 +377,7 @@ class STFSApp(tk.Tk):
         def worker():
             try:
                 proc = subprocess.Popen(
-                    [self.python_exe, str(BATTLE_CARD), regime],
+                    [self.python_exe, str(BATTLE_CARD), regime, "--no-open"],
                     cwd=str(SCRIPT_DIR),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,

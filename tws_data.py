@@ -428,7 +428,7 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
             return None
         stock = qualified[0]
 
-        # 52-week historical IV series → IV Rank
+        # 52-week historical IV series → min/max range for IV Rank denominator
         iv_bars = _ib.reqHistoricalData(
             stock,
             endDateTime="",
@@ -444,8 +444,19 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
         if iv_bars and len(iv_bars) >= 30:
             iv_vals = [b.close for b in iv_bars if b.close and b.close > 0]
             if iv_vals:
-                current_iv = iv_vals[-1]
                 lo_iv, hi_iv = min(iv_vals), max(iv_vals)
+                # Prefer a live IV snapshot (generic tick 106) so IVR matches
+                # what TWS watchlist shows; fall back to last historical bar.
+                try:
+                    snap = _ib.reqMktData(stock, "106", snapshot=True)
+                    _ib.sleep(2)
+                    live_iv = snap.impliedVolatility
+                    if live_iv and live_iv > 0:
+                        current_iv = live_iv
+                    else:
+                        current_iv = iv_vals[-1]
+                except Exception:
+                    current_iv = iv_vals[-1]
                 if hi_iv > lo_iv:
                     ivr = (current_iv - lo_iv) / (hi_iv - lo_iv) * 100
 
