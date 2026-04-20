@@ -134,6 +134,10 @@ def _place_options(data: dict) -> dict:
         return {"ok": False, "error": "Contracts must be ≥ 1"}
     if limit_price <= 0:
         return {"ok": False, "error": "Limit price must be > 0"}
+    if structure != "long_call" and not short_strike:
+        return {"ok": False, "error": f"{structure} requires a short_strike"}
+    if short_strike:
+        short_strike = float(short_strike)
 
     # ── Long call — single-leg order ─────────────────────────────────────────
     if structure == "long_call":

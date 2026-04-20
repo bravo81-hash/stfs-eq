@@ -358,8 +358,7 @@ def size_options_account(primary_plan, fallback_plans, acc):
             need = ml / (acc["risk_pct"] / 100.0)
             min_hint = int(math.ceil(need / 1000) * 1000)
 
-    notional = ((used_plan.get("net_debit") or used_plan.get("spread_width") or 0)
-                * 100 * cts) if cts > 0 else 0
+    notional = used_plan.get("max_loss_per_contract", 0) * cts if cts > 0 else 0
 
     return {
         "account": acc["name"],
@@ -380,7 +379,7 @@ def size_options_account(primary_plan, fallback_plans, acc):
 def fetch_options_data(ticker, df):
     """
     Fetch options chain, compute IV/HV ratio, select structure, size per account.
-    Tries TWS first (true IVR + live quotes); falls back to yfinance on failure.
+    Tries TWS first (IVP + live quotes); falls back to yfinance on failure.
     Returns dict or {"error": ...}. Called ONLY for STRONG BUY candidates.
     """
     tws_err = None
@@ -1149,7 +1148,7 @@ def render_options_block(opt):
     pp = opt["primary"]
     iv_hv = opt["iv_hv"]
     ivc, ivl = ivhv_class(iv_hv)
-    ivr_html = (f' · IVR <b>{opt["ivr"]:.0f}</b>' if "ivr" in opt else "")
+    ivr_html = (f' · IVP <b>{opt["ivp"]:.0f}</b>' if "ivp" in opt else "")
     src_badge = (' <span style="font-size:9px;color:var(--cyan);font-weight:700">TWS</span>'
                  if opt.get("data_source") == "TWS" else "")
 
@@ -1583,7 +1582,7 @@ def main():
         if "ok" in r["opt"]:
             pp   = r["opt"]["primary"]
             src  = " [TWS]" if r["opt"].get("data_source") == "TWS" else ""
-            ivr_str = f" · IVR {r['opt']['ivr']:.0f}" if "ivr" in r["opt"] else ""
+            ivr_str = f" · IVP {r['opt']['ivp']:.0f}" if "ivp" in r["opt"] else ""
             print(f"{pp['label']} · IV/HV {r['opt']['iv_hv']:.2f}{ivr_str}{src}")
         else:
             print(f"options n/a ({r['opt'].get('error','?')})")

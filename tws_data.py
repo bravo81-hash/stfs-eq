@@ -386,12 +386,12 @@ def get_positions() -> "list | None":
 
 def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
     """
-    Fetch options chain via TWS and compute IVR + structure selection.
+    Fetch options chain via TWS and compute IVP + structure selection.
     Returns the same dict shape as battle_card.fetch_options_data, or None
     (signals battle_card to fall back to the yfinance path).
 
     Improvements over the yfinance path:
-    - True 52-week IV Rank (IVR) from reqHistoricalData OPTION_IMPLIED_VOLATILITY
+    - 52-week IV Percentile (IVP) from reqHistoricalData OPTION_IMPLIED_VOLATILITY
     - Live bid/ask quotes from reqMktData snapshots
     - Real open interest from TWS
     """
@@ -428,6 +428,21 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
             return None
         stock = qualified[0]
 
+        # Live price for strike selection — use last 1-min bar so ATM reflects
+        # today's move, not yesterday's close (daily OHLC from yfinance is stale).
+        try:
+            price_bars = _ib.reqHistoricalData(
+                stock, endDateTime="", durationStr="300 S",
+                barSizeSetting="1 min", whatToShow="TRADES",
+                useRTH=False, formatDate=1, keepUpToDate=False,
+            )
+            if price_bars:
+                live_px = price_bars[-1].close
+                if live_px and live_px > 0:
+                    price = live_px
+        except Exception:
+            pass   # fall through to yesterday's close from df
+
         # 52-week daily series → min/max range for IV Rank denominator
         iv_bars = _ib.reqHistoricalData(
             stock,
@@ -439,7 +454,7 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
             formatDate=1,
             keepUpToDate=False,
         )
-        ivr = None
+        ivp = None
         current_iv = None
         if iv_bars and len(iv_bars) >= 30:
             iv_vals = [b.close for b in iv_bars if b.close and b.close > 0]
@@ -475,7 +490,7 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
                 # TWS 52IVR uses percentile, not min-max rank. Rank compresses
                 # when occasional spikes pull the max up (e.g. WMT rank=42 vs
                 # percentile=60). Percentile matches TWS watchlist exactly.
-                ivr = sum(1 for v in iv_vals if v < current_iv) / len(iv_vals) * 100
+                ivp = sum(1 for v in iv_vals if v < current_iv) / len(iv_vals) * 100
 
         # Options chain structure: available expirations + strikes
         chains = _ib.reqSecDefOptParams(ticker, "", "STK", stock.conId)
@@ -513,14 +528,14 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
         if spread_pct > C.OPT_MAX_SPREAD_PCT:
             return {"error": f"wide spread ({spread_pct:.0f}%)"}
 
-        # Structure selection: prefer IVR when available, else IV/HV ratio
-        if ivr is not None:
-            # IVR quartiles → same four structures as IV/HV path
-            if ivr < 25:
+        # Structure selection: prefer IVP when available, else IV/HV ratio
+        if ivp is not None:
+            # IVP quartiles → same four structures as IV/HV path
+            if ivp < 25:
                 p_struct, p_dte = "long_call",     C.DTE_LONG_CALL
-            elif ivr < 50:
+            elif ivp < 50:
                 p_struct, p_dte = "debit_spread",  C.DTE_DEBIT_SPREAD
-            elif ivr < 75:
+            elif ivp < 75:
                 p_struct, p_dte = "credit_spread", C.DTE_CREDIT_SPREAD
             else:
                 p_struct, p_dte = "diagonal",      C.DTE_DIAG_BACK
@@ -603,8 +618,8 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
             "account_sizing": account_sizing,
             "data_source":    "TWS",
         }
-        if ivr is not None:
-            result["ivr"] = round(ivr, 1)
+        if ivp is not None:
+            result["ivp"] = round(ivp, 1)
         return result
 
     except Exception:

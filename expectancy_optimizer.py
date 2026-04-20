@@ -39,7 +39,7 @@ for t in tickers:
     f3 = hm > np.roll(hm, 1); f3[0] = False
     f4 = (adx_s > C.ADX_THRESHOLD) & (adx_s > np.roll(adx_s, 1)) & (np.roll(adx_s,1) > np.roll(adx_s,2))
     f4[:2] = False
-    f5 = (rs >= 40) & (rs <= 80)
+    f5 = (rs >= C.RSI_LOWER_BAND) & (rs <= C.RSI_UPPER_BAND)
     
     tr = cl / np.roll(cl, C.RS_LOOKBACK) - 1
     bench_cl = bench_df["Close"].reindex(df.index).ffill().values
