@@ -1,0 +1,384 @@
+//@version=5
+// ======================================================================
+// STFS-EQ — Last-Hour Equity Extension v2.1
+// Forks STFS Actionable Dashboard. Adds weekly-TF trend, RS vs benchmark,
+// ATR% vol regime, mandatory-trio override, and entry/stop/target plots.
+// Designed to be run on DAILY timeframe for US stocks / ETFs.
+//
+// ROLE: Screening + chart confirmation only.
+// Trade construction (options structure, per-account sizing, IV/HV)
+// → handled by battle_card.py generator.
+//
+// v2.1 changes (synced with config.py Alpha optimisation):
+//   • ENTRY_ATR_MULT  1.0 → 1.5  (pullback entry, less aggressive fill)
+//   • STOP_ATR_MULT   2.0 → 2.5  (tighter risk management)
+//   • TARGET_ATR_MULT 2.0 → 4.0  (trend-following capture, +1.6 R)
+//   • STRONG_SCORE    7   → 6    (more setups qualify with tight trio gate)
+//   • F4 ADX rising fixed: was ta.rising(adx,2) [adx > adx[2], non-strict];
+//     now adx > adx[1] and adx[1] > adx[2] (strictly consecutive 2 bars)
+//     to match battle_card.py adx_dmi logic exactly.
+//   • Target label now shows computed R:R ratio instead of hardcoded "+2R".
+// ======================================================================
+indicator("STFS-EQ Actionable Dashboard", overlay=true, max_labels_count=500)
+
+// ======================================================
+// INPUTS
+// ======================================================
+grpCore = "Core Indicators"
+emaFastLen   = input.int(8,  "EMA Fast",   minval=1, group=grpCore)
+emaMidLen    = input.int(21, "EMA Mid",    minval=1, group=grpCore)
+emaSlowLen   = input.int(34, "EMA Slow",   minval=1, group=grpCore)
+hmaLen       = input.int(15, "HMA Length", minval=1, group=grpCore)
+rsiLen       = input.int(14, "RSI Length", minval=1, group=grpCore)
+adxDiLen     = input.int(14, "DI Length",  minval=1, group=grpCore)
+adxSmoothLen = input.int(14, "ADX Smoothing", minval=1, group=grpCore)
+obvMaLen     = input.int(21, "OBV EMA Length", minval=1, group=grpCore)
+adxThreshold = input.float(20.0, "ADX Trend Threshold", step=0.5, group=grpCore)
+
+grpEQ = "STFS-EQ Parameters"
+rsiUpperBand = input.float(75.0, "RSI Upper Band (anti-chase)", step=0.5, group=grpEQ)
+rsiLowerBand = input.float(50.0, "RSI Lower Band (trend floor)", step=0.5, group=grpEQ)
+atrLen       = input.int(14, "ATR Length",  minval=1, group=grpEQ)
+atrPctMin    = input.float(1.5, "ATR%  Min (too quiet below)", step=0.1, group=grpEQ)
+atrPctMax    = input.float(5.0, "ATR%  Max (too wild above)",  step=0.1, group=grpEQ)
+rsLookback   = input.int(20, "Relative Strength Lookback (days)", minval=5, group=grpEQ)
+benchSymbol  = input.symbol("AMEX:SPY", "RS Benchmark", group=grpEQ)
+weeklyEmaFast = input.int(10, "Weekly EMA Fast",  minval=1, group=grpEQ)
+weeklyEmaSlow = input.int(30, "Weekly EMA Slow",  minval=1, group=grpEQ)
+obvSlopeLookback = input.int(20, "OBV Slope Lookback (days)", minval=5, group=grpEQ)
+
+grpDir = "Direction"
+enableShort  = input.bool(false, "Also evaluate SHORT setups (default: long-only)", group=grpDir)
+
+grpTrade = "Trade Construction"
+// Defaults kept in sync with config.py: ENTRY=1.5, STOP=2.5, TARGET=4.0
+riskMultATR    = input.float(1.5, "Entry Pullback × ATR (below close)", step=0.1, group=grpTrade)
+stopMultATR    = input.float(2.5, "Stop × ATR (below entry)",           step=0.1, group=grpTrade)
+targetMultATR  = input.float(4.0, "Target × ATR (above entry)",         step=0.1, group=grpTrade)
+breakoutLookback = input.int(20, "Breakout Lookback (for MOO override)", minval=5, group=grpTrade)
+
+grpScore = "Scoring Thresholds"
+// STRONG_SCORE_MIN = 6 in config.py (was 7 in v2.0)
+strongScoreMin = input.int(6, "STRONG BUY min score (of 8)", minval=1, maxval=8, group=grpScore)
+watchScoreMin  = input.int(5, "WATCH min score",             minval=1, maxval=8, group=grpScore)
+
+grpUI = "Display"
+showSignals   = input.bool(true,  "Show STRONG markers on chart", group=grpUI)
+showTradeLines = input.bool(true, "Show entry/stop/target lines on STRONG BUY", group=grpUI)
+showDashboard = input.bool(true,  "Show Dashboard Table", group=grpUI)
+dashboardPos  = input.string("Top Right", "Dashboard Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group=grpUI)
+
+
+// ======================================================
+// CORE PRICE INDICATORS (daily)
+// ======================================================
+emaFast = ta.ema(close, emaFastLen)
+emaMid  = ta.ema(close, emaMidLen)
+emaSlow = ta.ema(close, emaSlowLen)
+hma     = ta.hma(close, hmaLen)
+rsi     = ta.rsi(close, rsiLen)
+[plusDI, minusDI, adx] = ta.dmi(adxDiLen, adxSmoothLen)
+
+// OBV (manual version for compatibility)
+obvStep = close > close[1] ? volume : close < close[1] ? -volume : 0.0
+obv     = ta.cum(obvStep)
+obvEma  = ta.ema(obv, obvMaLen)
+
+// ATR and ATR%
+atrVal  = ta.atr(atrLen)
+atrPct  = (atrVal / close) * 100
+
+
+// ======================================================
+// WEEKLY TREND (Factor 2) — via request.security, no lookahead
+// ======================================================
+[wClose, wEmaFast, wEmaSlow] = request.security(
+     syminfo.tickerid, "W",
+     [close, ta.ema(close, weeklyEmaFast), ta.ema(close, weeklyEmaSlow)],
+     lookahead=barmerge.lookahead_off)
+
+
+// ======================================================
+// RELATIVE STRENGTH vs BENCHMARK (Factor 6)
+// ======================================================
+benchClose = request.security(benchSymbol, "D", close, lookahead=barmerge.lookahead_off)
+
+thisRet  = (close / close[rsLookback]) - 1
+benchRet = (benchClose / benchClose[rsLookback]) - 1
+isBench  = syminfo.tickerid == benchSymbol
+rsBull   = isBench ? true : (thisRet > benchRet)
+rsBear   = isBench ? true : (thisRet < benchRet)
+
+
+// ======================================================
+// FACTOR BOOLEANS — LONG SIDE (8 factors)
+// ======================================================
+// F1: Daily EMA stack
+bullTrend = emaFast > emaMid and emaMid > emaSlow
+bearTrend = emaFast < emaMid and emaMid < emaSlow
+
+// F2: Weekly trend
+weeklyBull = wClose > wEmaSlow and wEmaFast > wEmaSlow
+weeklyBear = wClose < wEmaSlow and wEmaFast < wEmaSlow
+
+// F3: HMA direction
+hmaUp   = hma > hma[1]
+hmaDown = hma < hma[1]
+
+// F4: ADX strong AND strictly rising for 2 consecutive bars.
+// FIX v2.1: was ta.rising(adx, 2) which checks adx > adx[2] only (non-strict).
+// Python battle_card.py checks: adx[i] > adx[i-1] AND adx[i-1] > adx[i-2].
+// Equivalent in Pine: adx > adx[1] and adx[1] > adx[2].
+adxRising       = adx > adx[1] and adx[1] > adx[2]
+adxStrongRising = adx > adxThreshold and adxRising
+
+// F5: RSI in trend band (50–75 for longs; 25–50 for shorts)
+rsiBull = rsi >= rsiLowerBand and rsi <= rsiUpperBand
+rsiBear = rsi >= (100 - rsiUpperBand) and rsi <= (100 - rsiLowerBand)
+
+// F6: Relative strength — computed above
+
+// F7: OBV above its EMA AND rising slope
+obvSlopePos = (obv - obv[obvSlopeLookback]) > 0
+obvSlopeNeg = (obv - obv[obvSlopeLookback]) < 0
+obvBull = obv > obvEma and obvSlopePos
+obvBear = obv < obvEma and obvSlopeNeg
+
+// F8: ATR% within workable band
+atrPctOK = atrPct >= atrPctMin and atrPct <= atrPctMax
+
+
+// ======================================================
+// CONFLUENCE SCORING — LONG (0–8)
+// ======================================================
+longScore =
+     (bullTrend ? 1 : 0)        +   // F1
+     (weeklyBull ? 1 : 0)       +   // F2
+     (hmaUp ? 1 : 0)            +   // F3
+     (adxStrongRising ? 1 : 0)  +   // F4
+     (rsiBull ? 1 : 0)          +   // F5
+     (rsBull ? 1 : 0)           +   // F6
+     (obvBull ? 1 : 0)          +   // F7
+     (atrPctOK ? 1 : 0)             // F8
+
+shortScore =
+     (bearTrend ? 1 : 0)        +
+     (weeklyBear ? 1 : 0)       +
+     (hmaDown ? 1 : 0)          +
+     (adxStrongRising ? 1 : 0)  +
+     (rsiBear ? 1 : 0)          +
+     (rsBear ? 1 : 0)           +
+     (obvBear ? 1 : 0)          +
+     (atrPctOK ? 1 : 0)
+
+
+// ======================================================
+// MANDATORY TRIO OVERRIDE
+// Required: F1 (daily stack) + F2 (weekly) + F8 (vol regime).
+// ======================================================
+trioLong  = bullTrend  and weeklyBull  and atrPctOK
+trioShort = bearTrend  and weeklyBear  and atrPctOK
+
+
+// ======================================================
+// ACTIONABLE STATES
+// ======================================================
+strongLong  = longScore  >= strongScoreMin and trioLong
+watchLong   = not strongLong and longScore >= watchScoreMin and bullTrend
+
+strongShort = enableShort and shortScore >= strongScoreMin and trioShort
+watchShort  = enableShort and not strongShort and shortScore >= watchScoreMin and bearTrend
+
+actionText =
+     strongLong  ? "STRONG BUY"  :
+     strongShort ? "STRONG SHORT" :
+     watchLong   ? "WATCH LONG"  :
+     watchShort  ? "WATCH SHORT" :
+     "SKIP"
+
+actionColor =
+     strongLong  ? color.new(color.lime, 0)   :
+     strongShort ? color.new(color.red, 0)    :
+     watchLong   ? color.new(color.green, 35) :
+     watchShort  ? color.new(color.orange, 20) :
+     color.new(color.gray, 25)
+
+
+// ======================================================
+// TRADE CONSTRUCTION — entry, stop, target
+// ======================================================
+isFreshBreakout = close >= ta.highest(close, breakoutLookback)
+
+longEntry  = isFreshBreakout ? close : (close - riskMultATR * atrVal)
+longStop   = longEntry - stopMultATR * atrVal
+longTarget = longEntry + targetMultATR * atrVal
+
+shortEntry  = isFreshBreakout ? close : (close + riskMultATR * atrVal)
+shortStop   = shortEntry + stopMultATR * atrVal
+shortTarget = shortEntry - targetMultATR * atrVal
+
+// Compute R:R dynamically so label stays correct when inputs are changed
+rrRatio    = targetMultATR / stopMultATR
+rrLabel    = "(+" + str.tostring(math.round(rrRatio, 2), "#.##") + "R)"
+
+
+// ======================================================
+// CORE PLOTS (EMAs + HMA)
+// ======================================================
+plot(emaFast, title="EMA 8",  color=color.new(color.green, 0), linewidth=2)
+plot(emaMid,  title="EMA 21", color=color.new(color.blue, 0),  linewidth=2)
+plot(emaSlow, title="EMA 34", color=color.new(color.red, 0),   linewidth=2)
+plot(hma,     title="HMA 15", color=hmaUp ? color.new(color.teal, 0) : color.new(color.fuchsia, 0), linewidth=3)
+
+pFast = plot(emaFast, display=display.none)
+pSlow = plot(emaSlow, display=display.none)
+fill(pFast, pSlow, color=bullTrend ? color.new(color.green, 85) : bearTrend ? color.new(color.red, 85) : color.new(color.gray, 88))
+
+
+// ======================================================
+// SIGNAL MARKERS
+// ======================================================
+longSignal  = strongLong  and not strongLong[1]
+shortSignal = strongShort and not strongShort[1]
+
+plotshape(showSignals and longSignal,  title="Strong Buy",   text="BUY",   style=shape.labelup,   location=location.belowbar, color=color.new(color.lime, 0), textcolor=color.black, size=size.small)
+plotshape(showSignals and shortSignal, title="Strong Short", text="SHORT", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0),  textcolor=color.white, size=size.small)
+
+
+// ======================================================
+// TRADE LEVEL LINES — only on last bar, only if STRONG
+// ======================================================
+var line lnEntry  = na
+var line lnStop   = na
+var line lnTarget = na
+var label lbEntry  = na
+var label lbStop   = na
+var label lbTarget = na
+
+if barstate.islast
+    line.delete(lnEntry),  line.delete(lnStop),  line.delete(lnTarget)
+    label.delete(lbEntry), label.delete(lbStop), label.delete(lbTarget)
+
+    if showTradeLines and strongLong
+        lnEntry  := line.new(bar_index - 20, longEntry,  bar_index + 5, longEntry,  color=color.new(color.yellow, 0), width=2, style=line.style_dashed)
+        lnStop   := line.new(bar_index - 20, longStop,   bar_index + 5, longStop,   color=color.new(color.red, 0),    width=2, style=line.style_dashed)
+        lnTarget := line.new(bar_index - 20, longTarget, bar_index + 5, longTarget, color=color.new(color.lime, 0),   width=2, style=line.style_dashed)
+        lbEntry  := label.new(bar_index + 5, longEntry,  "ENTRY "  + str.tostring(longEntry,  format.mintick) + (isFreshBreakout ? "  (MOO)" : ""), style=label.style_label_left, color=color.new(color.yellow, 0), textcolor=color.black, size=size.small)
+        lbStop   := label.new(bar_index + 5, longStop,   "STOP "   + str.tostring(longStop,   format.mintick), style=label.style_label_left, color=color.new(color.red, 0),    textcolor=color.white, size=size.small)
+        lbTarget := label.new(bar_index + 5, longTarget, "TARGET " + str.tostring(longTarget, format.mintick) + "  " + rrLabel, style=label.style_label_left, color=color.new(color.lime, 0), textcolor=color.black, size=size.small)
+
+    if showTradeLines and strongShort
+        lnEntry  := line.new(bar_index - 20, shortEntry,  bar_index + 5, shortEntry,  color=color.new(color.yellow, 0), width=2, style=line.style_dashed)
+        lnStop   := line.new(bar_index - 20, shortStop,   bar_index + 5, shortStop,   color=color.new(color.red, 0),    width=2, style=line.style_dashed)
+        lnTarget := line.new(bar_index - 20, shortTarget, bar_index + 5, shortTarget, color=color.new(color.lime, 0),   width=2, style=line.style_dashed)
+        lbEntry  := label.new(bar_index + 5, shortEntry,  "ENTRY "  + str.tostring(shortEntry,  format.mintick) + (isFreshBreakout ? "  (MOO)" : ""), style=label.style_label_left, color=color.new(color.yellow, 0), textcolor=color.black, size=size.small)
+        lbStop   := label.new(bar_index + 5, shortStop,   "STOP "   + str.tostring(shortStop,   format.mintick), style=label.style_label_left, color=color.new(color.red, 0),    textcolor=color.white, size=size.small)
+        lbTarget := label.new(bar_index + 5, shortTarget, "TARGET " + str.tostring(shortTarget, format.mintick) + "  " + rrLabel, style=label.style_label_left, color=color.new(color.lime, 0), textcolor=color.black, size=size.small)
+
+
+// ======================================================
+// ALERTS
+// ======================================================
+alertcondition(longSignal,  title="STFS-EQ Strong Buy",   message="STFS-EQ: STRONG BUY on {{ticker}} at close {{close}}")
+alertcondition(shortSignal, title="STFS-EQ Strong Short", message="STFS-EQ: STRONG SHORT on {{ticker}} at close {{close}}")
+
+
+// ======================================================
+// DASHBOARD TABLE — 8 factors + score + trio + action + trade levels
+// ======================================================
+tablePosition =
+     dashboardPos == "Top Right"    ? position.top_right :
+     dashboardPos == "Top Left"     ? position.top_left  :
+     dashboardPos == "Bottom Right" ? position.bottom_right :
+                                      position.bottom_left
+
+// 2 cols × 16 rows
+var table dash = table.new(tablePosition, 2, 16, border_width=1)
+
+f_row(r, _label, _valtxt, _bg) =>
+    table.cell(dash, 0, r, _label,  text_color=color.white, bgcolor=color.new(color.black, 0))
+    table.cell(dash, 1, r, _valtxt, text_color=color.white, bgcolor=_bg)
+
+colPass = color.new(color.green, 15)
+colFail = color.new(color.red, 15)
+colNeut = color.new(color.gray, 15)
+
+if barstate.islast and showDashboard
+    // Header
+    table.cell(dash, 0, 0, "STFS-EQ v2.1", text_color=color.white, bgcolor=color.new(color.blue, 40))
+    table.cell(dash, 1, 0, syminfo.ticker,  text_color=color.white, bgcolor=color.new(color.blue, 40))
+
+    // F1 — Daily trend
+    f_row(1, "F1 Daily Stack",
+         bullTrend ? "Bull ▲" : bearTrend ? "Bear ▼" : "Flat",
+         bullTrend ? colPass : bearTrend ? colFail : colNeut)
+
+    // F2 — Weekly trend
+    f_row(2, "F2 Weekly Trend",
+         weeklyBull ? "Bull ▲" : weeklyBear ? "Bear ▼" : "Flat",
+         weeklyBull ? colPass : weeklyBear ? colFail : colNeut)
+
+    // F3 — HMA
+    f_row(3, "F3 HMA 15",
+         hmaUp ? "Rising" : hmaDown ? "Falling" : "Flat",
+         hmaUp ? colPass : hmaDown ? colFail : colNeut)
+
+    // F4 — ADX strictly rising 2 bars
+    f_row(4, "F4 ADX + Rising",
+         str.tostring(adx, "#.0") + (adxStrongRising ? " ▲▲" : adx > adxThreshold ? " ~" : " weak"),
+         adxStrongRising ? colPass : colNeut)
+
+    // F5 — RSI
+    f_row(5, "F5 RSI Band",
+         str.tostring(rsi, "#.0") + (rsiBull ? " in band" : rsiBear ? " bear band" : " out"),
+         rsiBull ? colPass : rsiBear ? colFail : colNeut)
+
+    // F6 — RS vs benchmark
+    rsTxt = isBench ? "n/a (is bench)" : (rsBull ? "Outperform" : "Underperform")
+    f_row(6, "F6 RS vs Bench",
+         rsTxt,
+         isBench ? colNeut : (rsBull ? colPass : colFail))
+
+    // F7 — OBV
+    f_row(7, "F7 OBV + Slope",
+         obvBull ? "Accum ▲" : obvBear ? "Distrib ▼" : "Mixed",
+         obvBull ? colPass : obvBear ? colFail : colNeut)
+
+    // F8 — ATR%
+    f_row(8, "F8 ATR% " + str.tostring(atrPct, "#.1") + "%",
+         atrPctOK ? "In band" : "Out of band",
+         atrPctOK ? colPass : colFail)
+
+    // Score row
+    table.cell(dash, 0, 9, "Score L/S", text_color=color.white, bgcolor=color.new(color.black, 0))
+    table.cell(dash, 1, 9, str.tostring(longScore) + " / " + str.tostring(shortScore),
+               text_color=color.white, bgcolor=color.new(color.blue, 60))
+
+    // Mandatory trio
+    trioStatus = strongLong ? "Long PASS" : strongShort ? "Short PASS" : "FAIL"
+    trioColor  = (trioLong or (enableShort and trioShort)) ? colPass : colFail
+    f_row(10, "Mandatory Trio", trioStatus, trioColor)
+
+    // Action
+    table.cell(dash, 0, 11, "Action", text_color=color.white, bgcolor=color.new(color.black, 0))
+    table.cell(dash, 1, 11, actionText, text_color=color.white, bgcolor=actionColor)
+
+    // Trade levels — dynamic R:R in target row
+    entryTxt  = strongLong  ? str.tostring(longEntry,  format.mintick) + (isFreshBreakout ? " MOO" : "")
+              : strongShort ? str.tostring(shortEntry,  format.mintick) + (isFreshBreakout ? " MOO" : "")
+              : "—"
+    stopTxt   = strongLong  ? str.tostring(longStop,   format.mintick)
+              : strongShort ? str.tostring(shortStop,   format.mintick)
+              : "—"
+    targetTxt = strongLong  ? str.tostring(longTarget,  format.mintick) + "  " + rrLabel
+              : strongShort ? str.tostring(shortTarget,  format.mintick) + "  " + rrLabel
+              : "—"
+
+    f_row(12, "Entry",  entryTxt,  strongLong or strongShort ? color.new(color.yellow, 40) : colNeut)
+    f_row(13, "Stop",   stopTxt,   strongLong or strongShort ? color.new(color.red, 40)    : colNeut)
+    f_row(14, "Target", targetTxt, strongLong or strongShort ? color.new(color.lime, 40)   : colNeut)
+
+    // Battle Card reminder
+    string bcAction = strongLong or strongShort ? "→ Run battle_card.py" : "—"
+    color  bcColor  = strongLong or strongShort ? color.new(color.orange, 20) : colNeut
+    f_row(15, "Battle Card", bcAction, bcColor)
