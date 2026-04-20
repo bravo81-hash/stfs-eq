@@ -235,18 +235,23 @@ def run_backtest(tickers, days=1000):
     
     print("\n------------------------------")
     print("  PROJECTED OPTIONS PROFILE   ")
+    print("  (illustrative upper bound)  ")
     print("------------------------------")
-    # Project Options PnL (Risking 1 unit per trade. Wins = +1.5 units, Loss = -1.0 unit)
-    # Long Calls/Spreads target 150% gain, Stop is 100% loss of debit.
+    # Illustrative estimate: risks 1 unit (debit) per trade.
+    # Wins assumed → +150% debit (2.5× target); losses → −100% debit.
+    # Does NOT model theta decay, IV crush mid-trade, or delta < 1.
+    # Real options results will be lower — treat as directional signal only.
     opt_wins = wins * 1.5
     opt_loss = losses * -1.0
     opt_net_r = opt_wins + opt_loss
-    print(f"Options Win Payout : +150% (Target Hit)")
-    print(f"Options Loss Max   : -100% (Stop Hit)")
+    wr_break_even = 1.0 / (1.0 + 1.5) * 100   # break-even win rate at 1.5R payoff
+    print(f"Assumed win payout : +150% of debit (best case, target hit)")
+    print(f"Assumed max loss   : -100% of debit (stop hit)")
+    print(f"Break-even win rate: {wr_break_even:.0f}% (actual: {win_rate:.1f}%)")
     if opt_net_r > 0:
-        print(f"Net Options Yield  : +{opt_net_r:.1f} R-Units (Colossal Leverage Upside)")
+        print(f"Illustrative yield : +{opt_net_r:.1f} R-units  ⚠  upper bound only")
     else:
-        print(f"Net Options Yield  : {opt_net_r:.1f} R-Units")
+        print(f"Illustrative yield : {opt_net_r:.1f} R-units")
     
 if __name__ == "__main__":
     print("====================================")

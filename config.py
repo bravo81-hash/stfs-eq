@@ -106,7 +106,9 @@ WATCHLISTS = {
         # Semi + Speculative + High Short Interest
         "AMD", "MU", "PLTR", "SQ", "HOOD", "RIOT", "MARA",
         "AFRM", "RBLX", "UPST", "CVNA", "DKNG", "ROKU", "SOFI", 
-        "TOST", "PINS", "RDDT", "CELH", "CLSK", "HUT", "BITF", "WOLF", "IONQ"
+        "TOST", "PINS", "RDDT", "CELH", "IONQ"
+        # Removed: CLSK, HUT, BITF (micro-cap crypto miners, thin options)
+        # Removed: WOLF (sub-$1, fails MIN_PRICE gate but wastes a fetch)
     ],
     "REFLATION": [
         # ETFs

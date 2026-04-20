@@ -25,6 +25,9 @@ TWS_PORT        = 7496
 TWS_CLIENT      = 15     # change if another client is already using 15
 CONNECT_TIMEOUT = 5      # seconds
 
+# yfinance uses hyphens; TWS requires spaces for some tickers
+_TWS_TICKER = {"BRK-B": "BRK B", "BRK-A": "BRK A"}
+
 
 def _try_connect() -> bool:
     global _ib, _connected
@@ -329,7 +332,8 @@ def get_ohlc(tickers: list, lookback_days: int = 300) -> "dict | None":
     out = {}
     for ticker in tickers:
         try:
-            contract = Stock(ticker, "SMART", "USD")
+            tws_sym = _TWS_TICKER.get(ticker, ticker)
+            contract = Stock(tws_sym, "SMART", "USD")
             bars = _ib.reqHistoricalData(
                 contract,
                 endDateTime="",
@@ -417,7 +421,8 @@ def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
         spread_width = atr_val * C.SPREAD_ATR_MULT
 
         # Qualify stock contract (needed for conId in reqSecDefOptParams)
-        stock = Stock(ticker, "SMART", "USD")
+        tws_sym = _TWS_TICKER.get(ticker, ticker)
+        stock = Stock(tws_sym, "SMART", "USD")
         qualified = _ib.qualifyContracts(stock)
         if not qualified:
             return None

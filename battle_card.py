@@ -230,6 +230,18 @@ def build_long_call(calls, price, dte, expiry):
         "oi": si(atm["openInterest"]),
     }
 
+def _patch_zero_quotes(chain_df):
+    """Off-hours yfinance returns bid=0/ask=0. Fill with lastPrice ±5% so spread
+    builders don't collapse to the $0.05 floor on every leg."""
+    df = chain_df.copy()
+    mask = (df["bid"] <= 0) & (df["ask"] <= 0) & (df.get("lastPrice", 0) > 0)
+    if mask.any():
+        last = df.loc[mask, "lastPrice"]
+        df.loc[mask, "bid"] = last * 0.95
+        df.loc[mask, "ask"] = last * 1.05
+    return df
+
+
 def build_debit_spread(calls, price, dte, expiry, width):
     atm = atm_row(calls, price)
     long_strike = sf(atm["strike"])
@@ -448,13 +460,13 @@ def fetch_options_data(ticker, df):
         else:
             p_struct, p_dte = "diagonal",      C.DTE_DIAG_BACK
 
-        # Fetch chain at primary target DTE
+        # Fetch chain at primary target DTE; patch zero bid/ask for off-hours data
         exp_p, dte_p = find_expiry(exps, p_dte)
         if exp_p == exp_ref:
-            calls_p, puts_p = calls_ref, puts_ref
+            calls_p, puts_p = _patch_zero_quotes(calls_ref), _patch_zero_quotes(puts_ref)
         else:
             ch = t.option_chain(exp_p)
-            calls_p, puts_p = ch.calls, ch.puts
+            calls_p, puts_p = _patch_zero_quotes(ch.calls), _patch_zero_quotes(ch.puts)
 
         # Build primary plan
         if p_struct == "long_call":
@@ -466,7 +478,8 @@ def fetch_options_data(ticker, df):
         else:  # diagonal
             exp_f, dte_f = find_expiry(exps, C.DTE_DIAG_FRONT)
             ch_f = t.option_chain(exp_f)
-            primary = build_diagonal(ch_f.calls, calls_p, price, dte_f, dte_p, exp_f, exp_p)
+            primary = build_diagonal(_patch_zero_quotes(ch_f.calls), calls_p,
+                                     price, dte_f, dte_p, exp_f, exp_p)
 
         if primary is None:
             return {"error": "could not build plan"}
@@ -476,7 +489,7 @@ def fetch_options_data(ticker, df):
         if p_struct in ("long_call", "diagonal"):
             exp_ds, dte_ds = find_expiry(exps, C.DTE_DEBIT_SPREAD)
             ch_ds = t.option_chain(exp_ds) if exp_ds != exp_p else None
-            c_ds = ch_ds.calls if ch_ds else calls_p
+            c_ds = _patch_zero_quotes(ch_ds.calls) if ch_ds else calls_p
             d_ds = dte_ds if ch_ds else dte_p
             fb1 = build_debit_spread(c_ds, price, d_ds, exp_ds, spread_width)
             fb2 = build_debit_spread(c_ds, price, d_ds, exp_ds, spread_width / 2)

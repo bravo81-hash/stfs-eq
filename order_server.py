@@ -17,6 +17,9 @@ TWS_HOST   = "127.0.0.1"
 TWS_PORT   = 7496
 TWS_CLIENT = 16          # change if this clashes with another API client
 
+# yfinance ticker → TWS symbol (TWS uses spaces, not hyphens)
+_TWS_TICKER = {"BRK-B": "BRK B", "BRK-A": "BRK A"}
+
 _ib       = None
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)  # serialises all IB calls
 
@@ -64,7 +67,7 @@ def _place_shares(data: dict) -> dict:
     if shares < 1:
         return {"ok": False, "error": "Shares must be ≥ 1"}
 
-    contract = Stock(ticker, "SMART", "USD")
+    contract = Stock(_TWS_TICKER.get(ticker, ticker), "SMART", "USD")
     _ib.qualifyContracts(contract)
 
     p_id  = _ib.client.getReqId()

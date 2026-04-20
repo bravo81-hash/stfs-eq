@@ -9,9 +9,8 @@ bench_df = data["SPY"].dropna()
 
 trades = []
 
-C.ENTRY_ATR_MULT = 1.5
-C.STOP_ATR_MULT = 4.0
-C.TARGET_ATR_MULT = 4.0
+# Use the same parameters as deployed in config.py — do not override here.
+# (Previous session had STOP=4.0 which mismatched production; fixed in audit.)
 
 for t in tickers:
     df = data[t].dropna()
