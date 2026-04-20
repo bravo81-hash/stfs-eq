@@ -29,7 +29,7 @@ for t in tickers:
     else: f2 = pd.Series(False, index=df.index)
     f3 = hm > hm.shift(1)
     f4 = (adx_s > C.ADX_THRESHOLD) & (adx_s > adx_s.shift(1)) & (adx_s.shift(1) > adx_s.shift(2))
-    f5 = (rs >= 40) & (rs <= 80)
+    f5 = (rs >= C.RSI_LOWER_BAND) & (rs <= C.RSI_UPPER_BAND)
     tr = cl / cl.shift(C.RS_LOOKBACK) - 1
     br = bench_df["Close"] / bench_df["Close"].shift(C.RS_LOOKBACK) - 1
     f6 = tr > br.reindex(df.index).ffill()
