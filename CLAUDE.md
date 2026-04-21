@@ -1,3 +1,4 @@
+# Inherits: ~/CLAUDE.md principles
 # STFS-EQ — Claude Code Reference
 
 This file is the authoritative context document for AI-assisted development on this project.
