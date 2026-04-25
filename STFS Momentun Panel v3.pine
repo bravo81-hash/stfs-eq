@@ -1,0 +1,77 @@
+//@version=5
+indicator("STFS Momentum Panel v3", overlay=false, max_lines_count=10)
+
+// ======================================================
+// INPUTS
+// ======================================================
+rsiLength    = input.int(14,  "RSI Length",         minval=1)
+adxLength    = input.int(14,  "ADX Smoothing",      minval=1)
+diLength     = input.int(14,  "DI Length",          minval=1)
+atrLen       = input.int(14,  "ATR Length",         minval=1)
+rsiSlopeLen  = input.int(3,   "RSI Slope Lookback", minval=1)
+adxThreshold = input.float(20,"ADX Trend Threshold",step=0.1)
+
+// ======================================================
+// CALCULATIONS
+// ======================================================
+rsi              = ta.rsi(close, rsiLength)
+[plusDI, minusDI, adx] = ta.dmi(diLength, adxLength)
+atr              = ta.atr(atrLen)
+atrPct           = (atr / close) * 100
+atrSma           = ta.sma(atrPct, 20)
+
+rsiRising        = rsi > rsi[rsiSlopeLen]
+rsiFalling       = rsi < rsi[rsiSlopeLen]
+
+adxStrong        = adx > adxThreshold
+atrExpanding     = atrPct > atrSma * 1.1
+atrContracting   = atrPct < atrSma * 0.9
+
+diGapBull        = plusDI > minusDI
+
+// ======================================================
+// VISUAL DESIGN LOGIC
+// Three visual layers on one pane, clearly separated:
+//
+//   [0 – 100]   RSI  (primary, thick, color = slope)
+//   [0 – 60ish] ADX + DI  (ADX orange, DI lines thin)
+//   ATR % shown as background color intensity only
+//   (no ATR line on scale — avoids collision)
+// ======================================================
+
+// ── RSI ──────────────────────────────────────────────
+rsiColor = rsiRising  ? color.new(color.lime,  0) :           rsiFalling ? color.new(color.red,   0) :                        color.new(color.gray, 30)
+
+plot(rsi, "RSI", color=rsiColor, linewidth=2)
+
+hline(70, "Overbought", color=color.new(color.red,   55), linestyle=hline.style_dashed)
+hline(60, "60",         color=color.new(color.gray,  70), linestyle=hline.style_dotted)
+hline(50, "Midline",    color=color.new(color.white, 55), linestyle=hline.style_solid)
+hline(40, "40",         color=color.new(color.gray,  70), linestyle=hline.style_dotted)
+hline(30, "Oversold",   color=color.new(color.green, 55), linestyle=hline.style_dashed)
+
+// RSI zone background — only when direction AND level agree (reduces noise)
+bgcolor(rsiRising  and rsi > 50 ? color.new(color.lime, 91) : na, title="RSI Bull Zone")
+bgcolor(rsiFalling and rsi < 50 ? color.new(color.red,  91) : na, title="RSI Bear Zone")
+
+// ── ADX + DI ─────────────────────────────────────────
+// ADX: orange when strong, muted when weak
+adxColor = adxStrong ? color.new(color.orange, 0) : color.new(color.gray, 50)
+plot(adx, "ADX", color=adxColor, linewidth=2)
+
+// +DI / -DI — thin, with gap fill for dominance
+pDIplus  = plot(plusDI,  "+DI", color=color.new(color.green, 20), linewidth=1)
+pDIminus = plot(minusDI, "-DI", color=color.new(color.red,   20), linewidth=1)
+fill(pDIplus, pDIminus,
+     color=diGapBull ? color.new(color.green, 82) : color.new(color.red, 82),
+     title="DI Dominance")
+
+// ADX threshold line
+hline(adxThreshold, "ADX Threshold", color=color.new(color.orange, 40), linestyle=hline.style_dashed)
+
+// ── Volatility (background only — no line, no scale conflict) ──
+// Warm red tint = expanding vol (be cautious selling premium)
+// Cool blue tint = contracting vol (premium selling window)
+// No tint = neutral
+bgcolor(atrExpanding   ? color.new(color.red,  95) : na, title="Vol Expanding")
+bgcolor(atrContracting ? color.new(color.aqua, 95) : na, title="Vol Contracting")
