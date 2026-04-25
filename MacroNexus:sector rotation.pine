@@ -1,0 +1,193 @@
+//@version=5
+indicator("MacroNexus: Sector Rotation [v1.7 HYBRID]", overlay=false)
+
+// ==========================================
+// 1. CONFIGURATION
+// ==========================================
+var GRP_SET = "Settings"
+lookback_trend = input.int(20, "Trend Lookback (Days)", group=GRP_SET)
+lookback_mom   = input.int(5, "Momentum Lookback (Days)", group=GRP_SET)
+text_size      = input.string(size.small, "Text Size", options=[size.tiny, size.small, size.normal])
+
+// ==========================================
+// 2. DATA FETCHING (HYBRID ENGINE)
+// ==========================================
+
+// A. Safe Fetcher (US Stocks - Standard Daily)
+// We use standard daily close to ensure data availability on generic tickers
+f_get_stock(sym) =>
+    request.security(sym, "D", [close, close[lookback_mom], close[lookback_trend]], ignore_invalid_symbol=true)
+
+// B. Global Fetcher (Crypto - 24/7)
+// Essential for Bitcoin to prevent NaN errors
+f_get_crypto(sym) =>
+    request.security(sym, "D", [close, close[lookback_mom], close[lookback_trend]], ignore_invalid_symbol=true)
+
+// --- UNIVERSE ---
+[p_xlk, m_xlk, t_xlk] = f_get_stock("XLK")
+[p_smh, m_smh, t_smh] = f_get_stock("SMH")
+[p_xlf, m_xlf, t_xlf] = f_get_stock("XLF")
+[p_xle, m_xle, t_xle] = f_get_stock("XLE")
+[p_xlv, m_xlv, t_xlv] = f_get_stock("XLV")
+[p_xli, m_xli, t_xli] = f_get_stock("XLI")
+[p_xlb, m_xlb, t_xlb] = f_get_stock("XLB")
+[p_xlu, m_xlu, t_xlu] = f_get_stock("XLU")
+[p_xlp, m_xlp, t_xlp] = f_get_stock("XLP")
+[p_xly, m_xly, t_xly] = f_get_stock("XLY")
+[p_xlc, m_xlc, t_xlc] = f_get_stock("XLC")
+[p_xlre, m_xlre, t_xlre] = f_get_stock("XLRE")
+[p_xhb, m_xhb, t_xhb] = f_get_stock("XHB")
+[p_btc, m_btc, t_btc] = f_get_crypto("CRYPTO:BTCUSD") // Explicit Crypto fetch
+
+// ==========================================
+// 3. RRG CALCULATION
+// ==========================================
+f_calc_rrg(now, mom, trend) =>
+    if na(now) or na(mom) or na(trend) or mom == 0 or trend == 0
+        [0.0, 0.0]
+    else
+        x = ((now - trend) / trend) * 100
+        y = ((now - mom) / mom) * 100
+        [x, y]
+
+[x_xlk, y_xlk] = f_calc_rrg(p_xlk, m_xlk, t_xlk)
+[x_smh, y_smh] = f_calc_rrg(p_smh, m_smh, t_smh)
+[x_xlf, y_xlf] = f_calc_rrg(p_xlf, m_xlf, t_xlf)
+[x_xle, y_xle] = f_calc_rrg(p_xle, m_xle, t_xle)
+[x_xlv, y_xlv] = f_calc_rrg(p_xlv, m_xlv, t_xlv)
+[x_xli, y_xli] = f_calc_rrg(p_xli, m_xli, t_xli)
+[x_xlb, y_xlb] = f_calc_rrg(p_xlb, m_xlb, t_xlb)
+[x_xlu, y_xlu] = f_calc_rrg(p_xlu, m_xlu, t_xlu)
+[x_xlp, y_xlp] = f_calc_rrg(p_xlp, m_xlp, t_xlp)
+[x_xly, y_xly] = f_calc_rrg(p_xly, m_xly, t_xly)
+[x_xlc, y_xlc] = f_calc_rrg(p_xlc, m_xlc, t_xlc)
+[x_xlre, y_xlre] = f_calc_rrg(p_xlre, m_xlre, t_xlre)
+[x_xhb, y_xhb] = f_calc_rrg(p_xhb, m_xhb, t_xhb)
+[x_btc, y_btc] = f_calc_rrg(p_btc, m_btc, t_btc)
+
+// ==========================================
+// 4. LOGIC & CONTEXT
+// ==========================================
+f_quad_info(x, y) =>
+    if x > 0 and y > 0
+        ["LEADING", "BULLISH", color.lime]
+    else if x < 0 and y > 0
+        ["IMPROVING", "ACCUM", color.aqua]
+    else if x > 0 and y < 0
+        ["WEAKENING", "CAUTION", color.orange]
+    else
+        ["LAGGING", "BEARISH", color.red]
+
+// Internal Regime Check (For Visual Fading Only)
+// This mirrors your MacroNexus Pro logic to highlight relevant sectors
+is_risk_off  = y_xlu > 0 and y_xlp > 0 and y_xlk < 0
+is_reflation = y_xle > 0 and y_xlf > 0
+is_liquidity = y_xlk > 0 and y_btc > 0
+
+// ==========================================
+// 5. SORTING & STORAGE
+// ==========================================
+type SectorData
+    string name
+    float mom
+    float trend
+    string phase
+    string action
+    color c
+
+var a = array.new<SectorData>()
+array.clear(a)
+
+f_add(n, x, y) =>
+    [p, act, col] = f_quad_info(x, y)
+    array.push(a, SectorData.new(n, y, x, p, act, col))
+
+f_add("TECH (XLK)", x_xlk, y_xlk)
+f_add("SEMIS (SMH)", x_smh, y_smh)
+f_add("BANKS (XLF)", x_xlf, y_xlf)
+f_add("ENERGY (XLE)", x_xle, y_xle)
+f_add("HEALTH (XLV)", x_xlv, y_xlv)
+f_add("IND (XLI)", x_xli, y_xli)
+f_add("MAT (XLB)", x_xlb, y_xlb)
+f_add("UTIL (XLU)", x_xlu, y_xlu)
+f_add("STAPLES (XLP)", x_xlp, y_xlp)
+f_add("DISC (XLY)", x_xly, y_xly)
+f_add("COMM (XLC)", x_xlc, y_xlc)
+f_add("RE (XLRE)", x_xlre, y_xlre)
+f_add("HOME (XHB)", x_xhb, y_xhb)
+f_add("BITCOIN", x_btc, y_btc)
+
+// Bubble Sort by Momentum
+for i = 0 to array.size(a) - 2
+    for j = 0 to array.size(a) - 2 - i
+        s1 = array.get(a, j)
+        s2 = array.get(a, j + 1)
+        // Handle NaNs by pushing them to bottom
+        m1 = na(s1.mom) ? -9999 : s1.mom
+        m2 = na(s2.mom) ? -9999 : s2.mom
+        if m1 < m2
+            array.set(a, j, s2)
+            array.set(a, j + 1, s1)
+
+// ==========================================
+// 6. DASHBOARD (SPLIT LAYOUT + BOTTOM CENTER)
+// ==========================================
+// 11 Columns to support Split View (5 Left + 1 Spacer + 5 Right)
+var table t = table.new(position.bottom_center, 11, 10, bgcolor=color.new(color.black, 40), border_width=1, frame_color=color.gray, border_color=color.gray)
+
+if barstate.islast
+    // Header
+    table.cell(t, 0, 0, "SECTOR ROTATION MATRIX", bgcolor=color.new(color.blue, 50), text_color=color.white, text_size=text_size)
+    table.merge_cells(t, 0, 0, 10, 0)
+    
+    // Sub-Headers
+    c_head = color.new(color.gray, 30)
+    
+    // Left Header
+    table.cell(t, 0, 1, "ASSET", bgcolor=c_head, text_color=color.white, text_size=text_size, text_halign=text.align_left)
+    table.cell(t, 1, 1, "MOM",   bgcolor=c_head, text_color=color.white, text_size=text_size)
+    table.cell(t, 2, 1, "TREND", bgcolor=c_head, text_color=color.white, text_size=text_size)
+    table.cell(t, 3, 1, "PHASE", bgcolor=c_head, text_color=color.white, text_size=text_size)
+    table.cell(t, 4, 1, "ACT",   bgcolor=c_head, text_color=color.white, text_size=text_size)
+    
+    // Spacer
+    table.cell(t, 5, 1, "", bgcolor=color.black)
+
+    // Right Header
+    table.cell(t, 6, 1, "ASSET", bgcolor=c_head, text_color=color.white, text_size=text_size, text_halign=text.align_left)
+    table.cell(t, 7, 1, "MOM",   bgcolor=c_head, text_color=color.white, text_size=text_size)
+    table.cell(t, 8, 1, "TREND", bgcolor=c_head, text_color=color.white, text_size=text_size)
+    table.cell(t, 9, 1, "PHASE", bgcolor=c_head, text_color=color.white, text_size=text_size)
+    table.cell(t, 10, 1, "ACT",  bgcolor=c_head, text_color=color.white, text_size=text_size)
+
+    int split = 7
+    
+    for i = 0 to array.size(a) - 1
+        s = array.get(a, i)
+        
+        // Calculate Position (Split View)
+        col_off = i < split ? 0 : 6
+        row_idx = i < split ? i + 2 : (i - split) + 2
+        
+        // Visual Fading Logic (From Auditor, Adapted)
+        // If we are in a specific regime, fade out the irrelevant sectors
+        float fade = 0
+        if is_risk_off and not (str.contains(s.name, "UTIL") or str.contains(s.name, "STAPLES") or str.contains(s.name, "HEALTH"))
+            fade := 60
+        else if is_reflation and not (str.contains(s.name, "ENERGY") or str.contains(s.name, "BANKS") or str.contains(s.name, "IND"))
+            fade := 60
+        else if is_liquidity and not (str.contains(s.name, "TECH") or str.contains(s.name, "SEMIS") or str.contains(s.name, "BITCOIN"))
+            fade := 60
+            
+        c_txt = color.new(color.white, fade)
+        c_val = color.new(s.c, fade)
+        
+        // Display
+        mom_txt   = na(s.mom) ? "---" : str.tostring(s.mom, "#.1") + "%"
+        trend_txt = na(s.trend) ? "---" : str.tostring(s.trend, "#.1") + "%"
+        
+        table.cell(t, 0 + col_off, row_idx, s.name, text_color=c_txt, text_halign=text.align_left, text_size=text_size)
+        table.cell(t, 1 + col_off, row_idx, mom_txt, text_color=s.mom > 0 ? color.new(color.lime, fade) : color.new(color.red, fade), text_size=text_size)
+        table.cell(t, 2 + col_off, row_idx, trend_txt, text_color=s.trend > 0 ? color.new(color.lime, fade) : color.new(color.red, fade), text_size=text_size)
+        table.cell(t, 3 + col_off, row_idx, s.phase, text_color=c_val, text_size=text_size, text_halign=text.align_center)
+        table.cell(t, 4 + col_off, row_idx, s.action, bgcolor=color.new(s.c, 70 + (fade/4)), text_color=color.white, text_size=text_size, text_halign=text.align_center)
