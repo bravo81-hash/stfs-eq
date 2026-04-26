@@ -627,19 +627,27 @@ def _stats(trades):
 
 
 def run_mini_backtest(df, bench_df, factors=None):
-    """Walk-forward backtest with slippage + commissions.
+    """Anchored walk-forward backtest with BACKTEST_FOLDS test windows.
 
-    Splits df into train (oldest BACKTEST_TRAIN_PCT) and test (newest 1-pct)
-    windows. Returns a flat dict (test stats) with extra `train` and `test`
-    sub-dicts so the composite-quality ranker keeps working unchanged but
-    callers can inspect both halves.
+    Each fold: train [0, test_start), test window slides forward across the
+    newest half of the data. Also computes a 'recent' window (BACKTEST_RECENT_BARS)
+    so the user can see how the signal behaves in current market conditions.
 
-    `factors` is the dict returned by indicators.compute_factors. If None,
-    it's computed inline (so existing direct callers still work).
+    Returns backward-compatible top-level keys (win_rate = mean across folds,
+    expectancy_R = mean, trades = total) plus new fold/recent detail keys.
     """
+    empty_stats = {"trades": 0, "wins": 0, "win_rate": 0.0, "compounded": 0.0, "expectancy_R": 0.0}
+    empty = {
+        **empty_stats,
+        "folds": [], "mean_wr": 0.0, "std_wr": 0.0,
+        "mean_expR": 0.0, "std_expR": 0.0,
+        "consistent_folds": 0, "n_folds_with_data": 0,
+        "recent": empty_stats,
+        "train": empty_stats, "test": empty_stats,
+    }
+
     if df is None or bench_df is None or len(df) < max(C.EMA_SLOW, C.WEEKLY_EMA_SLOW * 5, 50):
-        empty = {"trades": 0, "wins": 0, "win_rate": 0.0, "compounded": 0.0, "expectancy_R": 0.0}
-        return {**empty, "train": empty, "test": empty}
+        return empty
 
     if factors is None:
         factors = compute_factors(df, bench_df)
@@ -650,17 +658,68 @@ def run_mini_backtest(df, bench_df, factors=None):
     brk_a = is_breakout.values
     cl_a, at_a, op_a, hi_a, lo_a = cl.values, at.values, op.values, hi.values, lo.values
 
-    # Walk-forward split: oldest train_pct used for training context; newest fraction
-    # is the out-of-sample test window whose stats feed composite quality.
     n = len(df)
-    split = int(n * C.BACKTEST_TRAIN_PCT)
-    train_trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, 0, split)
-    test_trades  = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, split, n)
+    n_folds = C.BACKTEST_FOLDS
 
-    train_stats = _stats(train_trades)
-    test_stats  = _stats(test_trades)
-    # Top-level dict reports test stats (out-of-sample) — what ranking sorts on.
-    return {**test_stats, "train": train_stats, "test": test_stats}
+    # Anchored WFO: anchor covers first half; test windows slide across second half.
+    anchor = n // 2
+    remaining = n - anchor
+    test_size = max(remaining // n_folds, 1)
+
+    fold_stats = []
+    all_fold_trades = []
+    for k in range(n_folds):
+        test_start = anchor + k * test_size
+        test_end = (test_start + test_size) if k < n_folds - 1 else n
+        if test_start >= n:
+            break
+        trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, test_start, test_end)
+        fold_stats.append(_stats(trades))
+        all_fold_trades.extend(trades)
+
+    # Recent-era window (independent of folds — may overlap)
+    recent_start = max(0, n - C.BACKTEST_RECENT_BARS)
+    recent_trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, recent_start, n)
+    recent_stats = _stats(recent_trades)
+
+    folds_with_data = [s for s in fold_stats if s["trades"] > 0]
+    if folds_with_data:
+        wrs    = [s["win_rate"]     for s in folds_with_data]
+        exp_rs = [s["expectancy_R"] for s in folds_with_data]
+        mean_wr   = float(np.mean(wrs))
+        std_wr    = float(np.std(wrs))
+        mean_expR = float(np.mean(exp_rs))
+        std_expR  = float(np.std(exp_rs))
+        consistent = sum(1 for e in exp_rs if e > 0)
+    else:
+        mean_wr = std_wr = mean_expR = std_expR = 0.0
+        consistent = 0
+
+    total_trades = sum(s["trades"] for s in fold_stats)
+    total_wins   = sum(s["wins"]   for s in fold_stats)
+    comp = float(((1 + pd.Series(all_fold_trades)).prod() - 1) * 100) if all_fold_trades else 0.0
+
+    return {
+        # Backward-compat keys
+        "trades": total_trades,
+        "wins": total_wins,
+        "win_rate": mean_wr,
+        "compounded": comp,
+        "expectancy_R": mean_expR,
+        # New detail keys
+        "folds": fold_stats,
+        "mean_wr": mean_wr,
+        "std_wr": std_wr,
+        "mean_expR": mean_expR,
+        "std_expR": std_expR,
+        "consistent_folds": consistent,
+        "n_folds_with_data": len(folds_with_data),
+        "recent": recent_stats,
+        # Kept for any direct callers of .get("train")/.get("test")
+        "train": empty_stats,
+        "test": {"trades": total_trades, "wins": total_wins,
+                 "win_rate": mean_wr, "compounded": comp, "expectancy_R": mean_expR},
+    }
 
 
 def score_ticker(df, bench_df, is_benchmark=False):

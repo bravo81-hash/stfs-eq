@@ -135,3 +135,54 @@ def test_gap_up_target_fills_at_open():
     assert abs(trades[0] - expected) < 1e-9, (
         f"Gap-up: got {trades[0]:.6f}, expected {expected:.6f}"
     )
+
+
+def test_run_mini_backtest_returns_fold_structure():
+    """run_mini_backtest must return folds list + mean stats + recent window."""
+    import yfinance as yf
+    from datetime import date, timedelta
+    from battle_card import run_mini_backtest
+
+    start = (date.today() - timedelta(days=800)).isoformat()
+    df = yf.download("SPY", start=start, interval="1d", auto_adjust=True, progress=False)
+
+    # Handle MultiIndex columns from yfinance
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.droplevel(1)
+
+    df = df.dropna()
+
+    if len(df) < 200:
+        pytest.skip("Insufficient data for WFO test")
+
+    result = run_mini_backtest(df, df)
+
+    # New keys
+    assert "folds" in result, "Missing 'folds' key"
+    assert "mean_wr" in result, "Missing 'mean_wr' key"
+    assert "std_wr" in result, "Missing 'std_wr' key"
+    assert "mean_expR" in result, "Missing 'mean_expR' key"
+    assert "std_expR" in result, "Missing 'std_expR' key"
+    assert "consistent_folds" in result, "Missing 'consistent_folds' key"
+    assert "n_folds_with_data" in result, "Missing 'n_folds_with_data' key"
+    assert "recent" in result, "Missing 'recent' key"
+
+    # Backward-compat keys
+    assert "trades" in result
+    assert "win_rate" in result
+    assert "expectancy_R" in result
+    assert "compounded" in result
+
+    # Fold count matches config
+    import config as C
+    assert len(result["folds"]) == C.BACKTEST_FOLDS
+
+    # Each fold has required keys
+    for fold in result["folds"]:
+        assert "trades" in fold
+        assert "win_rate" in fold
+        assert "expectancy_R" in fold
+
+    # Recent window structure
+    assert "trades" in result["recent"]
+    assert "win_rate" in result["recent"]
