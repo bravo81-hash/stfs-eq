@@ -20,9 +20,11 @@ Public API:
 
 from __future__ import annotations
 
+import json
 import math
 import warnings
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -286,7 +288,7 @@ def detect_regime() -> dict:
         "is_liquidity": _up("XLK") and _up("SMH"),  # BTC RRG vs SPY skipped — different beta
     }
 
-    regime = _map_regime(states, macro)
+    raw_regime = _map_regime(states, macro)
 
     if stale_count >= 3:
         confidence = "LOW"
@@ -295,14 +297,74 @@ def detect_regime() -> dict:
     else:
         confidence = "HIGH"
 
+    # ── Hysteresis: require N consecutive runs in a new state before flipping ──
+    # Avoids whip-saw on borderline VOL / drift values that flip the watchlist
+    # daily. State persisted in output/.regime_state.json. Manual --regime
+    # overrides bypass this entirely (handled in battle_card.main).
+    state_path = Path(__file__).parent / C.OUTPUT_DIR / ".regime_state.json"
+    state_path.parent.mkdir(exist_ok=True)
+    prev = {}
+    try:
+        if state_path.exists():
+            prev = json.loads(state_path.read_text())
+    except Exception:
+        prev = {}
+
+    confirmed_regime = prev.get("confirmed", raw_regime)
+    pending = prev.get("pending")
+    pending_count = int(prev.get("pending_count", 0))
+
+    needed = max(1, int(C.REGIME_FLIP_CONFIRMATIONS))
+    flip_note = None
+    if raw_regime == confirmed_regime:
+        # Detected matches confirmed → reset any pending challenge.
+        pending = None
+        pending_count = 0
+        served = confirmed_regime
+    else:
+        if pending == raw_regime:
+            pending_count += 1
+        else:
+            pending = raw_regime
+            pending_count = 1
+        if pending_count >= needed:
+            # Enough consecutive confirmations → flip.
+            confirmed_regime = pending
+            served = confirmed_regime
+            flip_note = f"flipped to {confirmed_regime} after {pending_count} confirmations"
+            pending = None
+            pending_count = 0
+        else:
+            # Still pending — serve previously confirmed regime.
+            served = confirmed_regime
+            flip_note = f"PENDING flip {confirmed_regime}→{pending} ({pending_count}/{needed})"
+
+    try:
+        state_path.write_text(json.dumps({
+            "confirmed":     confirmed_regime,
+            "pending":       pending,
+            "pending_count": pending_count,
+            "last_raw":      raw_regime,
+            "last_run":      date.today().isoformat(),
+        }))
+    except Exception:
+        pass
+
+    if flip_note:
+        warnings_list.append(f"hysteresis: {flip_note}")
+
     return {
-        "regime":     regime,
-        "confidence": confidence,
-        "states":     states,
-        "macro":      macro,
-        "rrg":        rrg,
-        "evidence":   evidence,
-        "warnings":   warnings_list,
+        "regime":         served,
+        "raw_regime":     raw_regime,
+        "pending":        pending,
+        "pending_count":  pending_count,
+        "flip_threshold": needed,
+        "confidence":     confidence,
+        "states":         states,
+        "macro":          macro,
+        "rrg":            rrg,
+        "evidence":       evidence,
+        "warnings":       warnings_list,
     }
 
 

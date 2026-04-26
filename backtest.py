@@ -9,7 +9,7 @@ import yfinance as yf
 warnings.filterwarnings("ignore")
 
 import config as C
-from battle_card import ema, wilder, wma, hma, rsi, atr, adx_dmi, obv
+from indicators import ema, wilder, wma, hma, rsi, atr, adx_dmi, obv, compute_factors
 
 def run_backtest(tickers, days=1000):
     start = (date.today() - timedelta(days=days)).isoformat()

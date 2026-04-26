@@ -12,6 +12,8 @@ import threading
 import concurrent.futures
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+from journal import append_entry as _journal_append
+
 PORT       = 5001
 TWS_HOST   = "127.0.0.1"
 TWS_PORT   = 7496
@@ -105,6 +107,18 @@ def _place_shares(data: dict) -> dict:
         _ib.placeOrder(contract, order)
 
     entry_str = "MOO" if is_moo else f"LMT ${entry:.2f} DAY"
+    _journal_append(
+        event="entry",
+        ticker=ticker,
+        account=account,
+        signal=data.get("signal"),
+        order={
+            "type": "shares", "shares": shares,
+            "entry": entry, "stop": stop, "target": target,
+            "entry_type": "MOO" if is_moo else "LMT",
+            "order_ids": [p_id, tp_id, sl_id],
+        },
+    )
     return {
         "ok": True,
         "message": (
@@ -148,6 +162,16 @@ def _place_options(data: dict) -> dict:
         order.tif      = "DAY"
         order.transmit = False
         trade = _ib.placeOrder(opt, order)
+        _journal_append(
+            event="entry", ticker=ticker, account=account,
+            signal=data.get("signal"),
+            order={
+                "type": "options", "structure": "long_call",
+                "contracts": contracts, "expiry": data["expiry"],
+                "long_strike": long_strike, "limit_price": limit_price,
+                "order_ids": [trade.order.orderId],
+            },
+        )
         return {
             "ok": True,
             "message": (
@@ -210,6 +234,18 @@ def _place_options(data: dict) -> dict:
     order.tif      = "DAY"
     order.transmit = False
     trade = _ib.placeOrder(bag, order)
+    _journal_append(
+        event="entry", ticker=ticker, account=account,
+        signal=data.get("signal"),
+        order={
+            "type": "options", "structure": structure,
+            "contracts": contracts, "expiry": data["expiry"],
+            "expiry_front": data.get("expiry_front"),
+            "long_strike": long_strike, "short_strike": short_strike,
+            "limit_price": limit_price,
+            "order_ids": [trade.order.orderId],
+        },
+    )
 
     return {
         "ok": True,

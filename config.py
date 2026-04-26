@@ -223,6 +223,33 @@ BONUS_ATR_SLOW           = 60
 BONUS_ATR_EXPANSION_MIN  = 1.10   # ATR%(10) / ATR%(60) > 1.10
 
 # =====================================================================
+# BACKTEST FRICTION + WALK-FORWARD
+# =====================================================================
+BACKTEST_TRAIN_PCT      = 0.70    # oldest 70% = train; newest 30% = test (test feeds quality)
+SLIPPAGE_PCT            = 0.05    # ±0.05% per leg (entry + exit) widens fills realistically
+COMMISSION_PER_TRADE    = 1.0     # $ per share-trade leg; subtracted from realised R
+
+# =====================================================================
+# REGIME HYSTERESIS
+# =====================================================================
+REGIME_FLIP_CONFIRMATIONS = 2     # require N consecutive runs in new state before flipping
+
+# =====================================================================
+# SESSION RISK GATE
+# =====================================================================
+MAX_SESSION_RISK_PCT      = 2.0   # warn if total new-trade risk on any account exceeds this
+
+# =====================================================================
+# IV CRUSH SENSITIVITY (long calls + diagonals)
+# =====================================================================
+VEGA_DROP_TEST            = 10.0  # vega points; "BE @ -10v" assumed shock for break-even calc
+
+# =====================================================================
+# EARNINGS PROXIMITY BADGE
+# =====================================================================
+EARNINGS_WARN_DAYS        = 14    # show amber badge if earnings within N days
+
+# =====================================================================
 # OUTPUT
 # =====================================================================
 OUTPUT_DIR          = "output"

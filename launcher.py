@@ -57,7 +57,9 @@ def save_api_key(key):
 
 def find_latest_card(regime=None):
     if not OUTPUT_DIR.exists(): return None
-    pattern = f"battle_card_{regime}_*.html" if regime else "battle_card_*.html"
+    # If regime is AUTO, we want the most recent card regardless of its detected regime
+    search_regime = None if regime == "AUTO" else regime
+    pattern = f"battle_card_{search_regime}_*.html" if search_regime else "battle_card_*.html"
     files = sorted(OUTPUT_DIR.glob(pattern), key=lambda f: f.stat().st_mtime, reverse=True)
     return files[0] if files else None
 
@@ -183,9 +185,6 @@ class STFSApp(tk.Tk):
             self.regime_buttons[key] = btn
             reg_frame.columnconfigure(col, weight=1)
 
-        # Default-select AUTO so users can hit Run immediately.
-        self._select_regime("AUTO")
-
         # ── divider ──────────────────────────────────────────────────────────
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=16, pady=8)
 
@@ -272,6 +271,9 @@ class STFSApp(tk.Tk):
         tk.Label(self, textvariable=self.status_var, bg=BG1, fg=MUTED,
                  font=("Courier", 10), anchor="w", padx=16, pady=6).pack(
                      fill="x", side="bottom")
+
+        # Default-select AUTO so users can hit Run immediately (status_var must exist first).
+        self._select_regime("AUTO")
 
     # ── order server ────────────────────────────────────────────────────────
     def _start_order_server(self):
@@ -421,7 +423,7 @@ class STFSApp(tk.Tk):
             self._log("\n✓ Done. Opening in browser...\n", "ok")
             card = find_latest_card(regime)
             if card:
-                webbrowser.open(f"file://{card}")
+                webbrowser.open(card.absolute().as_uri())
         else:
             self.status_var.set("✗ Generation failed — see output above")
             self._log("\n✗ Failed. Check output above for details.\n", "err")
@@ -430,7 +432,7 @@ class STFSApp(tk.Tk):
         regime = self.selected_regime.get() or None
         card = find_latest_card(regime)
         if card:
-            webbrowser.open(f"file://{card}")
+            webbrowser.open(card.absolute().as_uri())
             self.status_var.set(f"Opening: {card.name}")
         else:
             self._log("No battle card found. Generate one first.\n", "warn")

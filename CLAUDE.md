@@ -35,8 +35,10 @@ and right-click → Transmits in TWS — no auto-execution ever.
 | `battle_card.py` | Core scoring, composite-quality ranking, trade sizing, options plans, HTML. |
 | `regime.py` | Auto-regime detection (drift/vol/term/skew/credit/event + sector RRG). |
 | `tws_data.py` | TWS API calls: OHLC, IVP, live price, options chain, index feeds. clientId=15 (readonly). |
-| `order_server.py` | HTTP order API. clientId=16 (read-write). localhost:5001. |
-| `backtest.py` | Walk-forward mini-backtest embedded in each battle card entry. |
+| `order_server.py` | HTTP order API. clientId=16 (read-write). localhost:5001. Appends to `output/trade_journal.jsonl` on success. |
+| `backtest.py` | Standalone CLI backtester (in-sample diagnostic). Imports indicators from `indicators.py`. |
+| `indicators.py` | **Single source of truth** for the 8-factor scoring rules. `compute_factors()` is called by both live signal (`score_ticker`) and the walk-forward mini-backtest — eliminates drift. |
+| `journal.py` | Append-only JSONL trade journal (signal context + order). Best-effort, never blocks orders. |
 | `optimizer.py` | Parameter sweep: finds optimal ENTRY/STOP/TARGET ATR multiples. |
 | `expectancy_optimizer.py` | Factor analysis: tests all 256 combinations of the 8 scoring factors. |
 | `stfs_eq_dashboard.pine` | TradingView PineScript v2.1 — kept in sync with Python config. |
@@ -91,6 +93,48 @@ The user manually transmits in TWS. Do not change this.
 Weights live in `config.RANKING_WEIGHTS`. Tickers with `bt_n_trades < THIN_HISTORY_TRADES`
 take a `THIN_HISTORY_PENALTY` haircut (default 15%) and show a `(thin)` tag in HTML.
 Sort order is now `quality DESC, score DESC, rs_pct DESC` — score-only sort is retired.
+
+### Walk-forward mini-backtest with friction
+`battle_card.run_mini_backtest()` splits the lookback into train (`BACKTEST_TRAIN_PCT`,
+default 70%) and test (newest 30%). The composite quality ranker uses **test-window**
+stats (out-of-sample). HTML displays `BT-test:` prominently with a side-by-side
+`(train …)` tag so user can spot train→test degradation. Friction model:
+`SLIPPAGE_PCT` (default 0.05% per leg, both entry and exit) and a flat
+`COMMISSION_PER_TRADE` ($1 per leg, expressed as % of notional). Both knobs in `config.py`.
+
+### Hysteresis on auto-regime
+`regime.detect_regime()` persists state to `output/.regime_state.json`. A flip
+to a new regime requires `REGIME_FLIP_CONFIRMATIONS` (default 2) consecutive runs
+showing the same new state. While pending, the previously confirmed regime is
+served. The HTML evidence panel surfaces the pending state and counter. Manual
+`--regime <NAME>` override skips hysteresis entirely.
+
+### IV-crush sensitivity (long-premium structures)
+For `long_call` and `diagonal`, `_vega_shock_breakeven()` uses Black-Scholes to
+solve for the underlying price needed to recover the debit if IV drops by
+`VEGA_DROP_TEST` points (default 10v). HTML row "BE @ -10v" shows that price;
+if it exceeds the underlying target, "⚠ VEGA RISK" badge appears. Informational
+only — does not change sizing or block the trade.
+
+### Earnings proximity badge
+`fetch_earnings_calendar` now returns `{symbol: ISO_date}` (still works as a set
+for blackout membership). The blackout window is `EARNINGS_BLACKOUT_DAYS` (5);
+the warn window is `EARNINGS_WARN_DAYS` (14). Tickers with earnings in 6–14 days
+land in STRONG BUY but show an amber `EARN <date> (Nd)` badge in the card header.
+
+### Session risk audit
+The HTML "Session Risk Audit" panel (above the 5-Gate) sums per-account underlying
+risk + options risk across all STRONG BUYs and compares to
+`MAX_SESSION_RISK_PCT × equity` (default 2.0%). Surfaces breach with red ⛔ but
+does NOT block — consistent with the manual-transmit discipline.
+
+### Trade journal (self-improvement loop seed)
+`order_server` calls `journal.append_entry` on every successful order placement,
+writing to `output/trade_journal.jsonl`. Each line captures: signal context
+(regime, score, quality, factors, IVP, BT test stats, earnings_date) +
+order details (account, structure, IDs). A future analysis pass can compare
+realized outcomes against the backtest's expected expectancy_R to detect signal
+drift. The journal is best-effort — never blocks order placement on I/O failure.
 
 ### Bonus momentum factors (Pine v3 — additive, not part of core 8)
 `bonus_rsi_slope` (RSI[0] > RSI[3]) and `bonus_atr_expansion`

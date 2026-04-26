@@ -38,6 +38,9 @@ except ImportError:
     sys.exit(1)
 
 import config as C
+from indicators import (
+    ema, wilder, wma, hma, rsi, atr, adx_dmi, obv, compute_factors,
+)
 
 # ── TWS integration (optional — falls back gracefully when not connected) ──────
 try:
@@ -54,46 +57,6 @@ except ImportError:
     def _tws_ohlc(*a, **kw): return None
     def _tws_options(*a, **kw): return None
     def _tws_positions(): return None
-
-
-# ============================================================================
-# TECHNICAL INDICATORS  (match PineScript v5 semantics)
-# ============================================================================
-
-def ema(s, n): return s.ewm(span=n, adjust=False).mean()
-def wilder(s, n): return s.ewm(alpha=1/n, adjust=False).mean()
-
-def wma(s, n):
-    w = np.arange(1, n+1)
-    return s.rolling(n).apply(lambda x: np.dot(x, w)/w.sum(), raw=True)
-
-def hma(s, n):
-    return wma(2*wma(s, int(n/2)) - wma(s, n), int(math.sqrt(n)))
-
-def rsi(s, n=14):
-    d = s.diff()
-    up, dn = d.clip(lower=0), -d.clip(upper=0)
-    rs = wilder(up, n) / wilder(dn, n).replace(0, np.nan)
-    return 100 - 100/(1+rs)
-
-def atr(hi, lo, cl, n=14):
-    tr = pd.concat([hi-lo, (hi-cl.shift()).abs(), (lo-cl.shift()).abs()], axis=1).max(axis=1)
-    return wilder(tr, n)
-
-def adx_dmi(hi, lo, cl, n=14):
-    um, dm = hi.diff(), -lo.diff()
-    pdm = np.where((um>dm)&(um>0), um, 0.)
-    mdm = np.where((dm>um)&(dm>0), dm, 0.)
-    pdm, mdm = pd.Series(pdm, index=hi.index), pd.Series(mdm, index=hi.index)
-    tr = pd.concat([hi-lo,(hi-cl.shift()).abs(),(lo-cl.shift()).abs()],axis=1).max(axis=1)
-    av = wilder(tr, n)
-    pdi = 100*wilder(pdm,n)/av.replace(0,np.nan)
-    mdi = 100*wilder(mdm,n)/av.replace(0,np.nan)
-    dx  = 100*(pdi-mdi).abs()/(pdi+mdi).replace(0,np.nan)
-    return pdi, mdi, wilder(dx, n)
-
-def obv(cl, vol):
-    return (np.sign(cl.diff()).fillna(0)*vol).cumsum()
 
 
 # ============================================================================
@@ -115,6 +78,47 @@ def si(v, d=0):
         return int(x) if math.isfinite(x) else d
     except Exception:
         return d
+
+def _bs_call_price(S, K, T, sigma, r=0.0):
+    """Black-Scholes call price (no dividend, r=0). Used only for IV-crush
+    breakeven sensitivity — not for sizing or pricing live options."""
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return max(0.0, S - K)
+    from math import log, sqrt, erf
+    d1 = (log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrt(T))
+    d2 = d1 - sigma * sqrt(T)
+    cdf = lambda x: 0.5 * (1 + erf(x / sqrt(2)))
+    return S * cdf(d1) - K * math.exp(-r * T) * cdf(d2)
+
+
+def _vega_shock_breakeven(structure, opt_data):
+    """For long-premium structures (long_call, diagonal back-month), compute the
+    underlying price at expiry needed to recover the debit IF IV drops by
+    VEGA_DROP_TEST percentage points. Returns (breakeven_price, vega_risk_flag).
+    Long calls/diagonals are vega-positive; a vol crush shrinks the value of the
+    long leg even if the underlying moves to the price target."""
+    if structure not in ("long_call", "diagonal"):
+        return None, False
+    pp = opt_data.get("primary") or {}
+    K = pp.get("long_strike")
+    dte = pp.get("dte", 0)
+    debit = pp.get("net_debit")
+    iv = opt_data.get("atm_iv") or 0.0
+    if not (K and dte and debit and iv > 0):
+        return None, False
+    T = dte / 365.0
+    iv_shocked = max(0.01, iv - C.VEGA_DROP_TEST / 100.0)
+    # Solve: BS_call(S, K, T, iv_shocked) = debit. Bisect over S in [K*0.5, K*2.5].
+    lo, hi = K * 0.5, K * 2.5
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if _bs_call_price(mid, K, T, iv_shocked) < debit:
+            lo = mid
+        else:
+            hi = mid
+    be = (lo + hi) / 2
+    return be, False  # flag computed by caller against price target
+
 
 def find_expiry(exps, target_dte):
     """Return (expiry_str, actual_dte) closest to target."""
@@ -142,6 +146,10 @@ def get_finnhub_key():
     return k
 
 def fetch_earnings_calendar(days_ahead):
+    """Returns dict {symbol: earnings_date_iso} for any earnings in the
+    next `days_ahead` calendar days. Backwards-compatible: callers expecting
+    `set` semantics (`if t in blackout`) still work since dict membership is
+    by key. Date is needed for the proximity badge in render_card."""
     key = get_finnhub_key()
     try:
         r = requests.get(f"{FINNHUB_BASE}/calendar/earnings",
@@ -150,10 +158,16 @@ def fetch_earnings_calendar(days_ahead):
                                  "token": key}, timeout=10)
         r.raise_for_status()
         cal = r.json().get("earningsCalendar") or []
-        return {e.get("symbol","").upper() for e in cal if e.get("symbol")}
+        out = {}
+        for e in cal:
+            sym = e.get("symbol", "").upper()
+            d = e.get("date")
+            if sym and d and sym not in out:
+                out[sym] = d
+        return out
     except Exception as e:
         print(f"  ⚠  Earnings calendar: {e}")
-        return set()
+        return {}
 
 def fetch_profile(ticker):
     key = get_finnhub_key()
@@ -523,182 +537,178 @@ def fetch_options_data(ticker, df):
 # SCORING
 # ============================================================================
 
-def run_mini_backtest(df, bench_df):
-    if df is None or bench_df is None or len(df) < max(C.EMA_SLOW, C.WEEKLY_EMA_SLOW*5, 50):
-        return {"trades": 0, "wins": 0, "win_rate": 0.0, "compounded": 0.0}
-    
-    hi, lo, cl, vol = df["High"], df["Low"], df["Close"], df["Volume"]
-    op = df["Open"]
-    ef = ema(cl, C.EMA_FAST); em = ema(cl, C.EMA_MID); es = ema(cl, C.EMA_SLOW)
-    hm = hma(cl, C.HMA_LEN)
-    rs = rsi(cl, C.RSI_LEN)
-    at = atr(hi, lo, cl, C.ATR_LEN)
-    _, _, adx_s = adx_dmi(hi, lo, cl, C.ADX_LEN)
-    ob = obv(cl, vol); oe = ema(ob, C.OBV_EMA_LEN)
-    atr_pct = (at / cl) * 100
+def _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, start_i, end_i):
+    """Replay strong_buy signals from start_i..end_i (exclusive). Apply slippage
+    on entry+exit and a flat per-leg commission. Returns list of net returns
+    (per-trade fractional P/L after friction).
 
-    f1 = (ef > em) & (em > es)
-    df_weekly = df.resample("W-FRI").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
-    if len(df_weekly) >= C.WEEKLY_EMA_SLOW + 2:
-        wf = ema(df_weekly["Close"], C.WEEKLY_EMA_FAST)
-        ws = ema(df_weekly["Close"], C.WEEKLY_EMA_SLOW)
-        df_weekly["f2"] = (df_weekly["Close"] > ws) & (wf > ws)
-        f2 = df_weekly["f2"].reindex(df.index).ffill().fillna(False)
-    else:
-        f2 = pd.Series(False, index=df.index)
+    Friction model (deliberately simple):
+      slip   = SLIPPAGE_PCT / 100        # e.g. 0.0005
+      entry  = pending * (1 + slip)      # pay up
+      exit   = (stop or target) * (1 - slip) # cross spread to close
+      pnl   -= 2 * COMMISSION_PER_TRADE / (entry * 100)   # ~per-share comm in % terms
+    """
+    slip = C.SLIPPAGE_PCT / 100.0
+    comm = C.COMMISSION_PER_TRADE  # absolute $ per leg; converted to % of notional below
 
-    f3 = hm > hm.shift(1)
-    f4 = (adx_s > C.ADX_THRESHOLD) & (adx_s > adx_s.shift(1)) & (adx_s.shift(1) > adx_s.shift(2))
-    f5 = (rs >= C.RSI_LOWER_BAND) & (rs <= C.RSI_UPPER_BAND)
+    in_trade = False
+    limit_order_active = False
+    entry_price = stop_loss = take_profit = p_limit = p_stop_d = p_tar_d = 0.0
+    pending_brk = False
+    trades = []
 
-    tr = cl / cl.shift(C.RS_LOOKBACK) - 1
-    br = bench_df["Close"] / bench_df["Close"].shift(C.RS_LOOKBACK) - 1
-    f6 = tr > br.reindex(df.index).ffill()
-    f7 = (ob > oe) & (ob > ob.shift(C.OBV_SLOPE_LOOKBACK))
-    f8 = (atr_pct >= C.ATR_PCT_MIN) & (atr_pct <= C.ATR_PCT_MAX)
+    def _close(exit_px):
+        nonlocal in_trade
+        # Slippage tightens the exit fill (we get worse than the level).
+        exit_eff = exit_px * (1 - slip) if exit_px >= entry_price else exit_px * (1 + slip)
+        gross = (exit_eff - entry_price) / entry_price
+        # Round-trip commission as fraction of notional (entry+exit, ~1 share basis).
+        comm_pct = (2 * comm) / (entry_price * 100.0) if entry_price > 0 else 0.0
+        trades.append(gross - comm_pct)
+        in_trade = False
 
-    score = f1.astype(int) + f2.astype(int) + f3.astype(int) + f4.astype(int) + f5.astype(int) + f6.astype(int) + f7.astype(int) + f8.astype(int)
-    trio = f1 & f2 & f8
-    strong_buy = (score >= C.STRONG_SCORE_MIN) & trio
-    is_breakout = (cl >= cl.rolling(C.BREAKOUT_LOOKBACK).max())
-
-    in_trade = False; limit_order_active = False 
-    entry_price = stop_loss = take_profit = p_limit = p_stop_d = p_tar_d = 0.0; pending_brk = False
-    
-    cl_a = cl.values; at_a = at.values; op_a = op.values; hi_a = hi.values; lo_a = lo.values
-    sb_a = strong_buy.values; brk_a = is_breakout.values
-    all_trades = []
-    
-    for i in range(len(df) - 1):
+    for i in range(start_i, min(end_i, len(df) - 1)):
         if in_trade:
-            if lo_a[i+1] <= stop_loss:
-                all_trades.append((stop_loss - entry_price) / entry_price); in_trade = False
-            elif hi_a[i+1] >= take_profit:
-                all_trades.append((take_profit - entry_price) / entry_price); in_trade = False
+            if lo_a[i + 1] <= stop_loss:
+                _close(stop_loss)
+            elif hi_a[i + 1] >= take_profit:
+                _close(take_profit)
             continue
-            
+
         if limit_order_active:
             if pending_brk:
-                entry_price = op_a[i+1]; stop_loss = entry_price - p_stop_d; take_profit = entry_price + p_tar_d
-                limit_order_active = False; in_trade = True
-                if lo_a[i+1] <= stop_loss:
-                    all_trades.append((stop_loss - entry_price) / entry_price); in_trade = False
-                elif hi_a[i+1] >= take_profit:
-                    all_trades.append((take_profit - entry_price) / entry_price); in_trade = False
+                # MOO open with adverse slippage applied.
+                entry_price = op_a[i + 1] * (1 + slip)
+                stop_loss = entry_price - p_stop_d
+                take_profit = entry_price + p_tar_d
+                limit_order_active = False
+                in_trade = True
+                if lo_a[i + 1] <= stop_loss:   _close(stop_loss)
+                elif hi_a[i + 1] >= take_profit: _close(take_profit)
             else:
-                if lo_a[i+1] <= p_limit:
-                    entry_price = p_limit; stop_loss = entry_price - p_stop_d; take_profit = entry_price + p_tar_d
-                    limit_order_active = False; in_trade = True
-                    if lo_a[i+1] <= stop_loss:
-                        all_trades.append((stop_loss - entry_price) / entry_price); in_trade = False
-                else: limit_order_active = False
-
-        if not in_trade and not limit_order_active:
-            if sb_a[i]:
-                pending_brk = brk_a[i]
-                if pending_brk:
-                    p_stop_d = C.STOP_ATR_MULT * at_a[i]; p_tar_d = C.TARGET_ATR_MULT * at_a[i]
+                if lo_a[i + 1] <= p_limit:
+                    entry_price = p_limit * (1 + slip)
+                    stop_loss = entry_price - p_stop_d
+                    take_profit = entry_price + p_tar_d
+                    limit_order_active = False
+                    in_trade = True
+                    if lo_a[i + 1] <= stop_loss: _close(stop_loss)
                 else:
-                    p_limit = cl_a[i] - (C.ENTRY_ATR_MULT * at_a[i])
-                    p_stop_d = C.STOP_ATR_MULT * at_a[i]; p_tar_d = C.TARGET_ATR_MULT * at_a[i]
-                limit_order_active = True
+                    limit_order_active = False
 
-    wins = sum(1 for t in all_trades if t > 0)
-    total = len(all_trades)
-    wr = (wins / total * 100) if total > 0 else 0.0
-    comp = (((1 + pd.Series(all_trades)).prod() - 1) * 100) if total > 0 else 0.0
-    # Expectancy in R units: (avg trade %) / (avg loss % magnitude)
-    # Using STOP_ATR_MULT vs TARGET_ATR_MULT geometry, target is +1.6R, stop is -1R.
-    # So normalise by avg_loss magnitude to express in R.
-    if total > 0:
-        avg = sum(all_trades) / total
-        losses = [t for t in all_trades if t < 0]
-        avg_loss_mag = (-sum(losses) / len(losses)) if losses else 0.01
-        expectancy_R = avg / avg_loss_mag if avg_loss_mag > 0 else 0.0
-    else:
-        expectancy_R = 0.0
-    return {"trades": total, "wins": wins, "win_rate": wr,
-            "compounded": comp, "expectancy_R": expectancy_R}
+        if not in_trade and not limit_order_active and sb_a[i]:
+            pending_brk = bool(brk_a[i])
+            if pending_brk:
+                p_stop_d = C.STOP_ATR_MULT * at_a[i]
+                p_tar_d  = C.TARGET_ATR_MULT * at_a[i]
+            else:
+                p_limit  = cl_a[i] - (C.ENTRY_ATR_MULT * at_a[i])
+                p_stop_d = C.STOP_ATR_MULT * at_a[i]
+                p_tar_d  = C.TARGET_ATR_MULT * at_a[i]
+            limit_order_active = True
+
+    return trades
+
+
+def _stats(trades):
+    n = len(trades)
+    if n == 0:
+        return {"trades": 0, "wins": 0, "win_rate": 0.0, "compounded": 0.0, "expectancy_R": 0.0}
+    wins = sum(1 for t in trades if t > 0)
+    wr = wins / n * 100
+    comp = ((1 + pd.Series(trades)).prod() - 1) * 100
+    losses = [t for t in trades if t < 0]
+    avg = sum(trades) / n
+    avg_loss_mag = (-sum(losses) / len(losses)) if losses else 0.01
+    exp_R = avg / avg_loss_mag if avg_loss_mag > 0 else 0.0
+    return {"trades": n, "wins": wins, "win_rate": wr, "compounded": comp,
+            "expectancy_R": exp_R}
+
+
+def run_mini_backtest(df, bench_df, factors=None):
+    """Walk-forward backtest with slippage + commissions.
+
+    Splits df into train (oldest BACKTEST_TRAIN_PCT) and test (newest 1-pct)
+    windows. Returns a flat dict (test stats) with extra `train` and `test`
+    sub-dicts so the composite-quality ranker keeps working unchanged but
+    callers can inspect both halves.
+
+    `factors` is the dict returned by indicators.compute_factors. If None,
+    it's computed inline (so existing direct callers still work).
+    """
+    if df is None or bench_df is None or len(df) < max(C.EMA_SLOW, C.WEEKLY_EMA_SLOW * 5, 50):
+        empty = {"trades": 0, "wins": 0, "win_rate": 0.0, "compounded": 0.0, "expectancy_R": 0.0}
+        return {**empty, "train": empty, "test": empty}
+
+    if factors is None:
+        factors = compute_factors(df, bench_df)
+
+    cl, hi, lo, op, at = df["Close"], df["High"], df["Low"], df["Open"], factors["atr"]
+    is_breakout = (cl >= cl.rolling(C.BREAKOUT_LOOKBACK).max())
+    sb_a  = factors["strong_buy"].values
+    brk_a = is_breakout.values
+    cl_a, at_a, op_a, hi_a, lo_a = cl.values, at.values, op.values, hi.values, lo.values
+
+    # Walk-forward split: oldest train_pct used for training context; newest fraction
+    # is the out-of-sample test window whose stats feed composite quality.
+    n = len(df)
+    split = int(n * C.BACKTEST_TRAIN_PCT)
+    train_trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, 0, split)
+    test_trades  = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, split, n)
+
+    train_stats = _stats(train_trades)
+    test_stats  = _stats(test_trades)
+    # Top-level dict reports test stats (out-of-sample) — what ranking sorts on.
+    return {**test_stats, "train": train_stats, "test": test_stats}
 
 
 def score_ticker(df, bench_df, is_benchmark=False):
-    min_bars = max(C.EMA_SLOW, C.WEEKLY_EMA_SLOW*5, C.RS_LOOKBACK+5, 50)
+    min_bars = max(C.EMA_SLOW, C.WEEKLY_EMA_SLOW * 5, C.RS_LOOKBACK + 5, 50)
     if df is None or len(df) < min_bars:
         return {"error": f"insufficient data ({len(df) if df is not None else 0} bars)"}
 
-    hi, lo, cl, vol = df["High"], df["Low"], df["Close"], df["Volume"]
-    ef  = ema(cl, C.EMA_FAST); em = ema(cl, C.EMA_MID); es = ema(cl, C.EMA_SLOW)
-    hm  = hma(cl, C.HMA_LEN)
-    rs  = rsi(cl, C.RSI_LEN)
-    at  = atr(hi, lo, cl, C.ATR_LEN)
-    _,_,adx_s = adx_dmi(hi, lo, cl, C.ADX_LEN)
-    ob  = obv(cl, vol)
-    oe  = ema(ob, C.OBV_EMA_LEN)
+    fac = compute_factors(df, bench_df, is_benchmark=is_benchmark)
 
-    c = float(cl.iloc[-1]); a = float(at.iloc[-1])
-    atr_pct = (a/c)*100
+    cl = df["Close"]
+    c = float(cl.iloc[-1])
+    a = float(fac["atr"].iloc[-1])
+    atr_pct = float(fac["atr_pct"].iloc[-1])
 
-    f1 = ef.iloc[-1]>em.iloc[-1] and em.iloc[-1]>es.iloc[-1]
-    wk = df.resample("W-FRI").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
-    if len(wk) >= C.WEEKLY_EMA_SLOW+2:
-        wc = wk["Close"]
-        wf = ema(wc, C.WEEKLY_EMA_FAST).iloc[-1]; ws = ema(wc, C.WEEKLY_EMA_SLOW).iloc[-1]
-        f2 = wc.iloc[-1]>ws and wf>ws
-    else:
-        f2 = False
-    f3 = hm.iloc[-1]>hm.iloc[-2]
-    adx_val = float(adx_s.iloc[-1])
-    f4 = adx_val>C.ADX_THRESHOLD and adx_s.iloc[-1]>adx_s.iloc[-2]>adx_s.iloc[-3]
-    rsi_val = float(rs.iloc[-1])
-    f5 = C.RSI_LOWER_BAND<=rsi_val<=C.RSI_UPPER_BAND
+    f1 = bool(fac["f1"].iloc[-1])
+    f2 = bool(fac["f2"].iloc[-1])
+    f3 = bool(fac["f3"].iloc[-1])
+    f4 = bool(fac["f4"].iloc[-1])
+    f5 = bool(fac["f5"].iloc[-1])
+    f6 = bool(fac["f6"].iloc[-1]) if not is_benchmark else True
+    f7 = bool(fac["f7"].iloc[-1])
+    f8 = bool(fac["f8"].iloc[-1])
 
-    if is_benchmark:
-        f6, rs_val = True, 0.0
-    else:
-        tr = cl.iloc[-1]/cl.iloc[-1-C.RS_LOOKBACK]-1
-        bc = bench_df["Close"]
-        bca = bc[bc.index<=cl.index[-1]]
-        if len(bca)>C.RS_LOOKBACK:
-            br = bca.iloc[-1]/bca.iloc[-1-C.RS_LOOKBACK]-1
-            f6 = tr>br; rs_val = float((tr-br)*100)
-        else:
-            f6 = False; rs_val = 0.0
+    rsi_val = float(fac["rsi"].iloc[-1])
+    adx_val = float(fac["adx"].iloc[-1])
+    rs_val  = 0.0 if is_benchmark else float(fac["rs_pct"].iloc[-1])
 
-    f7 = ob.iloc[-1]>oe.iloc[-1] and ob.iloc[-1]>ob.iloc[-1-C.OBV_SLOPE_LOOKBACK]
-    f8 = C.ATR_PCT_MIN<=atr_pct<=C.ATR_PCT_MAX
-
-    factors = {"F1 Daily Stack":bool(f1),"F2 Weekly Trend":bool(f2),
-               "F3 HMA Rising":bool(f3),"F4 ADX+Rising":bool(f4),
-               "F5 RSI Band":bool(f5),"F6 RS vs Bench":bool(f6),
-               "F7 OBV+Slope":bool(f7),"F8 ATR% Band":bool(f8)}
+    factors = {"F1 Daily Stack": f1, "F2 Weekly Trend": f2,
+               "F3 HMA Rising":  f3, "F4 ADX+Rising":   f4,
+               "F5 RSI Band":    f5, "F6 RS vs Bench":  f6,
+               "F7 OBV+Slope":   f7, "F8 ATR% Band":    f8}
     score = sum(factors.values())
-    trio  = factors["F1 Daily Stack"] and factors["F2 Weekly Trend"] and factors["F8 ATR% Band"]
+    trio  = f1 and f2 and f8
 
-    if score >= C.STRONG_SCORE_MIN and trio: action = "STRONG BUY"
-    elif score >= C.WATCH_SCORE_MIN and factors["F1 Daily Stack"]: action = "WATCH"
-    else: action = "SKIP"
+    if score >= C.STRONG_SCORE_MIN and trio:                  action = "STRONG BUY"
+    elif score >= C.WATCH_SCORE_MIN and f1:                   action = "WATCH"
+    else:                                                     action = "SKIP"
 
-    # Always attach historic backtest result!
-    bt_stats = run_mini_backtest(df, bench_df)
+    # Same `fac` is reused — backtest cannot drift from live signal logic.
+    bt_stats = run_mini_backtest(df, bench_df, factors=fac)
 
-    # Bonus factors (Pine Momentum Panel v3) — additive, third-tier tie-break.
-    bonus_rsi_slope = False
-    if len(rs) > C.BONUS_RSI_SLOPE_LOOKBACK:
-        bonus_rsi_slope = bool(rs.iloc[-1] > rs.iloc[-1 - C.BONUS_RSI_SLOPE_LOOKBACK])
-    atr_fast = atr(hi, lo, cl, C.BONUS_ATR_FAST)
-    atr_slow = atr(hi, lo, cl, C.BONUS_ATR_SLOW)
-    bonus_atr_expansion = False
-    if len(atr_slow.dropna()) and atr_slow.iloc[-1] > 0:
-        af_pct = (atr_fast.iloc[-1] / cl.iloc[-1]) * 100
-        as_pct = (atr_slow.iloc[-1] / cl.iloc[-1]) * 100
-        if as_pct > 0:
-            bonus_atr_expansion = bool((af_pct / as_pct) > C.BONUS_ATR_EXPANSION_MIN)
-    momentum_bonus = int(bonus_rsi_slope) + int(bonus_atr_expansion)
+    bonus_rsi_slope     = bool(fac["bonus_rsi_slope"].iloc[-1])
+    bonus_atr_expansion = bool(fac["bonus_atr_expansion"].iloc[-1])
+    momentum_bonus      = int(fac["momentum_bonus"].iloc[-1])
 
-    return {"close":c,"atr":a,"atr_pct":float(atr_pct),"rsi":rsi_val,
-            "adx":adx_val,"rs_pct":rs_val,"factors":factors,
-            "score":int(score),"trio_pass":bool(trio),"action":action,
-            "is_breakout": bool(c>=cl.iloc[-C.BREAKOUT_LOOKBACK:].max()),
+    return {"close": c, "atr": a, "atr_pct": atr_pct, "rsi": rsi_val,
+            "adx": adx_val, "rs_pct": rs_val, "factors": factors,
+            "score": int(score), "trio_pass": bool(trio), "action": action,
+            "is_breakout": bool(c >= cl.iloc[-C.BREAKOUT_LOOKBACK:].max()),
             "backtest": bt_stats,
             "bonus_rsi_slope": bonus_rsi_slope,
             "bonus_atr_expansion": bonus_atr_expansion,
@@ -1080,7 +1090,7 @@ async function mPush(type) {
   const account = document.getElementById('m-acct').value;
   if (!account) { mSetStat('Select a TWS account first.', 'err'); return; }
 
-  let payload = { type: type, ticker: _mdata.ticker, account: account };
+  let payload = { type: type, ticker: _mdata.ticker, account: account, signal: _mdata.signal };
 
   if (type === 'shares') {
     const qty = parseInt(document.getElementById('m-sh-qty').value);
@@ -1162,7 +1172,7 @@ def render_underlying_block(u_plan):
   </table>
 </div>"""
 
-def render_options_block(opt):
+def render_options_block(opt, underlying_target=None):
     if opt is None or "error" in opt:
         err = opt["error"] if opt else "fetch failed"
         return f"""
@@ -1215,6 +1225,20 @@ def render_options_block(opt):
               <td>${s['notional']:,.0f}{dg}</td>
             </tr>""")
 
+    # IV-crush sensitivity for long-premium structures (long_call, diagonal):
+    # solve for the underlying price needed to recover the debit assuming a
+    # VEGA_DROP_TEST point IV drop. If that price exceeds the underlying target,
+    # the trade is mathematically vega-trapped — flag it.
+    vega_html = ""
+    be_price, _ = _vega_shock_breakeven(pp["structure"], opt)
+    if be_price is not None:
+        vega_risk = (underlying_target is not None) and be_price > underlying_target
+        col = "var(--red)" if vega_risk else "var(--muted)"
+        risk_badge = " <span style='color:var(--red);font-weight:700'>⚠ VEGA RISK</span>" if vega_risk else ""
+        vega_html = (f"<div class='trow'><span class='tl'>BE @ -{C.VEGA_DROP_TEST:.0f}v</span>"
+                     f"<span class='tv' style='color:{col}'>"
+                     f"${be_price:.2f}{risk_badge}</span></div>")
+
     return f"""
 <div class="tblock">
   <div class="tblock-hdr">OPTIONS{src_badge}
@@ -1234,6 +1258,7 @@ def render_options_block(opt):
     <span class="tv tv-target">{pp['target_label']}</span></div>
   <div class="trow"><span class="tl">Max loss/ct</span>
     <span class="tv tv-stop">${pp['max_loss_per_contract']:.0f}</span></div>
+  {vega_html}
   <table class="atbl">
     <thead><tr><th>Account</th><th>Contracts</th><th>Risk</th><th>Notional / Note</th></tr></thead>
     <tbody>{''.join(acc_rows)}</tbody>
@@ -1257,9 +1282,16 @@ def render_card(r, detailed):
         bt_col = "var(--green)" if bt["win_rate"] >= 60 else ("var(--amber)" if bt["win_rate"] >= 40 else "var(--red)")
         exp_R = bt.get("expectancy_R", 0.0)
         thin_tag = " <span style='color:var(--amber)'>(thin)</span>" if r.get("thin_history") else ""
-        bt_html = (f"  ·  <span style='color:{bt_col};font-weight:700'>BT: "
+        train = bt.get("train", {})
+        train_tag = ""
+        if train.get("trades", 0) > 0:
+            # Show train side-by-side so user can spot train→test degradation
+            train_tag = (f" <span style='color:var(--muted);font-size:11px'>"
+                         f"(train {train['win_rate']:.0f}%/{train.get('expectancy_R',0):+.2f}R "
+                         f"n={train['trades']})</span>")
+        bt_html = (f"  ·  <span style='color:{bt_col};font-weight:700'>BT-test: "
                    f"{bt['win_rate']:.1f}% Win · {exp_R:+.2f}R · {bt['trades']} trades · "
-                   f"{bt['compounded']:.0f}% Ret</span>{thin_tag}")
+                   f"{bt['compounded']:.0f}% Ret</span>{thin_tag}{train_tag}")
     else:
         bt_html = "  ·  <span style='color:var(--muted)'>BT: N/A</span>"
 
@@ -1274,13 +1306,27 @@ def render_card(r, detailed):
     mb = r.get("momentum_bonus", 0)
     mb_html = f"  ·  <span style='color:var(--cyan)'>+MB {mb}</span>" if mb > 0 else ""
 
+    # Earnings proximity badge — amber within WARN_DAYS, red within BLACKOUT_DAYS
+    # (gate already excludes the latter, but kept defensive for manual overrides).
+    earn_html = ""
+    edate = r.get("earnings_date")
+    if edate:
+        try:
+            d_ahead = (date.fromisoformat(edate) - date.today()).days
+            if 0 <= d_ahead <= C.EARNINGS_WARN_DAYS:
+                col = "var(--red)" if d_ahead <= C.EARNINGS_BLACKOUT_DAYS else "var(--amber)"
+                earn_html = (f"  ·  <span style='color:{col};font-weight:700'>"
+                             f"EARN {edate} ({d_ahead}d)</span>")
+        except Exception:
+            pass
+
     header = f"""
 <div class="card {cc}">
   <div class="card-hdr">
     <div>
       <span class="ticker">{ticker}</span>
       <span class="tmeta">  {r.get('industry','')}  ·  ${r['close']:.2f}
-        · ATR {r['atr']:.2f} ({r['atr_pct']:.1f}%)  · RSI {r['rsi']:.0f}  · ADX {r['adx']:.0f}{bt_html}{q_html}{mb_html}</span>
+        · ATR {r['atr']:.2f} ({r['atr_pct']:.1f}%)  · RSI {r['rsi']:.0f}  · ADX {r['adx']:.0f}{bt_html}{q_html}{mb_html}{earn_html}</span>
     </div>
     <div>
       <span class="spill {sc}">Score {score}/8</span>
@@ -1295,7 +1341,7 @@ def render_card(r, detailed):
         trade = f"""
   <div class="trade-grid">
     {render_underlying_block(r['u_plan'])}
-    {render_options_block(r.get('opt'))}
+    {render_options_block(r.get('opt'), underlying_target=r['u_plan'].get('target'))}
   </div>"""
         btn = (
             '\n  <div style="text-align:right;margin-top:10px">'
@@ -1307,11 +1353,35 @@ def render_card(r, detailed):
 
 
 def _order_json(r: dict) -> str:
-    """Serialise trade plan data for embedding in the HTML button data-order attribute."""
+    """Serialise trade plan data for embedding in the HTML button data-order attribute.
+    Includes a `signal` block so the order server can journal context (regime,
+    score, quality, IVP, factors, etc.) alongside fills for outcome analysis."""
     u   = r["u_plan"]
     opt = r.get("opt")
+    bt  = r.get("backtest", {})
+    signal_block = {
+        "regime":         r.get("regime"),
+        "score":          r.get("score"),
+        "trio_pass":      r.get("trio_pass"),
+        "quality":        r.get("quality"),
+        "thin_history":   r.get("thin_history"),
+        "rs_pct":         r.get("rs_pct"),
+        "rsi":            r.get("rsi"),
+        "adx":            r.get("adx"),
+        "atr_pct":        r.get("atr_pct"),
+        "momentum_bonus": r.get("momentum_bonus"),
+        "earnings_date":  r.get("earnings_date"),
+        "factors":        r.get("factors"),
+        "bt_test_winrate":  bt.get("win_rate"),
+        "bt_test_expR":     bt.get("expectancy_R"),
+        "bt_test_trades":   bt.get("trades"),
+        "ivp":              (opt or {}).get("ivp"),
+        "iv_hv":            (opt or {}).get("iv_hv"),
+        "atm_iv":           (opt or {}).get("atm_iv"),
+    }
     data: dict = {
         "ticker": r["ticker"],
+        "signal": signal_block,
         "shares": {
             "entry":      round(u["entry"],  4),
             "stop":       round(u["stop"],   4),
@@ -1389,6 +1459,16 @@ def render_html(ctx):
         if auto.get("warnings"):
             warn_html = "<div style='color:var(--amber);font-size:11px;margin-top:6px'>⚠ " + \
                         " · ".join(html.escape(w) for w in auto["warnings"]) + "</div>"
+
+        hyst_html = ""
+        raw = auto.get("raw_regime")
+        pending = auto.get("pending")
+        if pending and raw and raw != auto["regime"]:
+            n = auto.get("pending_count", 0)
+            need = auto.get("flip_threshold", C.REGIME_FLIP_CONFIRMATIONS)
+            hyst_html = (f"<div style='color:var(--cyan);font-size:11px;margin-top:6px'>"
+                         f"⏳ Hysteresis: detected <b>{html.escape(raw)}</b> but serving "
+                         f"<b>{html.escape(auto['regime'])}</b> until {n}/{need} confirmations.</div>")
         auto_html = f"""
 <details class="card" style="padding:10px 20px;margin:10px 0">
   <summary style="cursor:pointer;font-weight:700">
@@ -1426,6 +1506,7 @@ def render_html(ctx):
       <tbody>{evid_rows}</tbody></table>
     </div>
   </div>
+  {hyst_html}
   {warn_html}
 </details>"""
 
@@ -1501,7 +1582,53 @@ def render_html(ctx):
   </thead><tbody>{drop_rows}</tbody></table>
 </details>""" if dropped else ""
 
-    gate_html = """
+    # Session risk audit: sum per-account underlying risk + options risk across
+    # all STRONG BUYs vs MAX_SESSION_RISK_PCT × equity. Surface only — no block.
+    session_audit_html = ""
+    if strong:
+        per_acc = {a["name"]: {"equity": a["equity"], "risk": 0.0,
+                               "cap": a["equity"] * C.MAX_SESSION_RISK_PCT / 100.0}
+                   for a in C.ACCOUNTS}
+        for r in strong:
+            for s in r.get("u_plan", {}).get("account_sizing", []):
+                if s["account"] in per_acc:
+                    per_acc[s["account"]]["risk"] += s.get("risk_dollars", 0)
+            opt = r.get("opt") or {}
+            if "ok" in opt:
+                for s in opt.get("account_sizing", []):
+                    if s["account"] in per_acc:
+                        per_acc[s["account"]]["risk"] += s.get("risk_dollars", 0)
+        rows = []
+        any_breach = False
+        for nm, d in per_acc.items():
+            pct = (d["risk"] / d["equity"] * 100) if d["equity"] else 0
+            breach = pct > C.MAX_SESSION_RISK_PCT
+            any_breach = any_breach or breach
+            col = "var(--red)" if breach else ("var(--amber)" if pct >= C.MAX_SESSION_RISK_PCT * 0.7 else "var(--green)")
+            tag = " ⛔" if breach else ""
+            rows.append(
+                f"<tr><td><b>{nm}</b></td>"
+                f"<td>${d['equity']:,.0f}</td>"
+                f"<td style='color:{col};font-weight:700'>${d['risk']:,.0f} ({pct:.2f}%){tag}</td>"
+                f"<td style='color:var(--muted)'>cap ${d['cap']:,.0f} ({C.MAX_SESSION_RISK_PCT:.1f}%)</td>"
+                f"</tr>"
+            )
+        breach_alert = (
+            f"<div class='alert alert-r' style='margin:8px 0'><span>⛔</span>"
+            f"<span><strong>Session risk cap exceeded</strong> on one or more accounts. "
+            f"Sum risk per account is the sum of underlying + options risk across all STRONG BUYs.</span></div>"
+            if any_breach else ""
+        )
+        session_audit_html = f"""
+<div class="gate" style="margin-bottom:12px">
+  <h2 style="color:var(--amber);margin-top:0">📊 Session Risk Audit ({len(strong)} STRONG BUYs)</h2>
+  {breach_alert}
+  <table class="drop"><thead>
+    <tr><th>Account</th><th>Equity</th><th>Sum new risk</th><th>Cap</th></tr>
+  </thead><tbody>{''.join(rows)}</tbody></table>
+</div>"""
+
+    gate_html = session_audit_html + """
 <div class="gate">
   <h2 style="color:var(--amber);margin-top:0">🚦 Last-Hour 5-Gate — ALL must be YES</h2>
   <div class="gate-row"><span class="cb"></span>
@@ -1509,7 +1636,7 @@ def render_html(ctx):
   <div class="gate-row"><span class="cb"></span>
     <span><b>2.</b> Score ≥7 + Mandatory Trio passes</span></div>
   <div class="gate-row"><span class="cb"></span>
-    <span><b>3.</b> Risk sizing — within per-trade AND ≤2% total new risk across all books today</span></div>
+    <span><b>3.</b> Risk sizing — within per-trade AND ≤""" + f"{C.MAX_SESSION_RISK_PCT:.1f}" + """% total new risk across all books today (see audit above)</span></div>
   <div class="gate-row"><span class="cb"></span>
     <span><b>4.</b> Sector concentration — &lt;2 open positions in same GICS sector</span></div>
   <div class="gate-row"><span class="cb"></span>
@@ -1681,8 +1808,14 @@ def main():
     print(f"  Stage 1: {len(watchlist)} names in universe")
 
     print("  ▸ Earnings calendar...")
-    blackout = fetch_earnings_calendar(C.EARNINGS_BLACKOUT_DAYS)
-    print(f"    {len(blackout)} companies reporting in next {C.EARNINGS_BLACKOUT_DAYS} days")
+    # Fetch out to the warn window so we can also surface a proximity badge
+    # for tickers reporting > BLACKOUT_DAYS but ≤ WARN_DAYS away.
+    earnings_window = max(C.EARNINGS_BLACKOUT_DAYS, C.EARNINGS_WARN_DAYS)
+    earnings_map = fetch_earnings_calendar(earnings_window)
+    blackout = {t for t, d in earnings_map.items()
+                if (date.fromisoformat(d) - date.today()).days <= C.EARNINGS_BLACKOUT_DAYS}
+    print(f"    {len(blackout)} companies reporting in next {C.EARNINGS_BLACKOUT_DAYS} days "
+          f"({len(earnings_map)} within {earnings_window})")
 
     print("  ▸ Profiles (Finnhub)...")
     profiles = {}
@@ -1733,6 +1866,8 @@ def main():
             dropped.append({"ticker":t,"reason":info["error"]}); continue
         info["ticker"] = t
         info["industry"] = profiles.get(t,{}).get("industry","")
+        info["earnings_date"] = earnings_map.get(t)  # ISO date or None
+        info["regime"] = regime  # journal context for trade outcome analysis
         results.append(info)
 
     _attach_quality(results)
@@ -1777,7 +1912,7 @@ def main():
     print(f"\n  ▸ Battle card: {out_path}")
 
     if C.AUTO_OPEN_IN_BROWSER and not args.no_open:
-        webbrowser.open(f"file://{out_path.resolve()}")
+        webbrowser.open(out_path.resolve().as_uri())
         print("  ▸ Opened in browser")
 
 if __name__ == "__main__":
