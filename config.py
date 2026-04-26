@@ -225,9 +225,10 @@ BONUS_ATR_EXPANSION_MIN  = 1.10   # ATR%(10) / ATR%(60) > 1.10
 # =====================================================================
 # BACKTEST FRICTION + WALK-FORWARD
 # =====================================================================
-BACKTEST_TRAIN_PCT      = 0.70    # oldest 70% = train; newest 30% = test (test feeds quality)
-SLIPPAGE_PCT            = 0.05    # ±0.05% per leg (entry + exit) widens fills realistically
-COMMISSION_PER_TRADE    = 1.0     # $ per share-trade leg; subtracted from realised R
+BACKTEST_FOLDS          = 5       # anchored walk-forward folds (test windows)
+BACKTEST_RECENT_BARS    = 252     # ~1 year; "recent era" stats window
+SLIPPAGE_PCT            = 0.05    # ±0.05% per leg (entry + exit)
+COMMISSION_PER_TRADE    = 0.001   # fraction of notional per leg (0.001 = 0.1%); 0.2% round-trip
 
 # =====================================================================
 # REGIME HYSTERESIS
