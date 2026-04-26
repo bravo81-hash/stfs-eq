@@ -84,15 +84,19 @@ def compute_factors(df: pd.DataFrame, bench_df: pd.DataFrame, is_benchmark: bool
     # F1: daily EMA stack
     f1 = (ef > em) & (em > es)
 
-    # F2: weekly trend (resample, compute, reindex back to daily)
+    # F2: weekly trend (resample W-FRI matches TradingView weekly bar convention)
     df_weekly = df.resample("W-FRI").agg(
         {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
     ).dropna()
+    wema_fast_d = pd.Series(np.nan, index=df.index)
+    wema_slow_d = pd.Series(np.nan, index=df.index)
     if len(df_weekly) >= C.WEEKLY_EMA_SLOW + 2:
         wf = ema(df_weekly["Close"], C.WEEKLY_EMA_FAST)
         ws = ema(df_weekly["Close"], C.WEEKLY_EMA_SLOW)
         df_weekly["f2"] = (df_weekly["Close"] > ws) & (wf > ws)
         f2 = df_weekly["f2"].reindex(df.index).ffill().fillna(False)
+        wema_fast_d = wf.reindex(df.index).ffill()
+        wema_slow_d = ws.reindex(df.index).ffill()
     else:
         f2 = pd.Series(False, index=df.index)
 
@@ -137,4 +141,12 @@ def compute_factors(df: pd.DataFrame, bench_df: pd.DataFrame, is_benchmark: bool
         "bonus_rsi_slope": bonus_rsi_slope.fillna(False),
         "bonus_atr_expansion": bonus_atr_expansion.fillna(False),
         "momentum_bonus": momentum_bonus,
+        # Raw indicator series — for indicator verification panel in HTML
+        "ema_fast": ef,
+        "ema_mid": em,
+        "ema_slow": es,
+        "obv_raw": ob,
+        "obv_ema": oe,
+        "wema_fast": wema_fast_d,
+        "wema_slow": wema_slow_d,
     }
