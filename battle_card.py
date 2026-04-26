@@ -538,18 +538,15 @@ def fetch_options_data(ticker, df):
 # ============================================================================
 
 def _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, start_i, end_i):
-    """Replay strong_buy signals from start_i..end_i (exclusive). Apply slippage
-    on entry+exit and a flat per-leg commission. Returns list of net returns
-    (per-trade fractional P/L after friction).
+    """Replay strong_buy signals from start_i..end_i (exclusive). Returns list of
+    net fractional P/L per trade after friction.
 
-    Friction model (deliberately simple):
-      slip   = SLIPPAGE_PCT / 100        # e.g. 0.0005
-      entry  = pending * (1 + slip)      # pay up
-      exit   = (stop or target) * (1 - slip) # cross spread to close
-      pnl   -= 2 * COMMISSION_PER_TRADE / (entry * 100)   # ~per-share comm in % terms
+    Friction model:
+      entry  = limit * (1 + slip)        # pay up on entry
+      exit   = level * (1 ± slip)        # cross spread on close
+      comm   = 2 * COMMISSION_PER_TRADE  # fraction of notional, round-trip
     """
     slip = C.SLIPPAGE_PCT / 100.0
-    comm = C.COMMISSION_PER_TRADE  # absolute $ per leg; converted to % of notional below
 
     in_trade = False
     limit_order_active = False
@@ -559,12 +556,9 @@ def _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, start_i, end_i):
 
     def _close(exit_px):
         nonlocal in_trade
-        # Slippage tightens the exit fill (we get worse than the level).
         exit_eff = exit_px * (1 - slip) if exit_px >= entry_price else exit_px * (1 + slip)
         gross = (exit_eff - entry_price) / entry_price
-        # Round-trip commission as fraction of notional (entry+exit, ~1 share basis).
-        comm_pct = (2 * comm) / (entry_price * 100.0) if entry_price > 0 else 0.0
-        trades.append(gross - comm_pct)
+        trades.append(gross - 2 * C.COMMISSION_PER_TRADE)
         in_trade = False
 
     for i in range(start_i, min(end_i, len(df) - 1)):
