@@ -1799,7 +1799,9 @@ def _attach_quality(results):
            + w["expectancy"] * n_exp[i]
            + w["n_trades"]   * n_trd[i]
            + w["rs_pct"]     * n_rs[i])
-        thin = r["backtest"]["trades"] < C.THIN_HISTORY_TRADES
+        folds = r["backtest"].get("folds", [])
+        thin = (not folds or
+                any(s["trades"] < C.THIN_HISTORY_TRADES for s in folds))
         if thin:
             q *= (1.0 - C.THIN_HISTORY_PENALTY)
         r["quality"] = round(q, 4)
