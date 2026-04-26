@@ -765,6 +765,20 @@ def score_ticker(df, bench_df, is_benchmark=False):
     bonus_atr_expansion = bool(fac["bonus_atr_expansion"].iloc[-1])
     momentum_bonus      = int(fac["momentum_bonus"].iloc[-1])
 
+    def _last(series):
+        v = series.iloc[-1]
+        return None if (v != v) else float(v)   # None for NaN
+
+    raw_indicators = {
+        "ema_fast":  _last(fac["ema_fast"]),
+        "ema_mid":   _last(fac["ema_mid"]),
+        "ema_slow":  _last(fac["ema_slow"]),
+        "wema_fast": _last(fac["wema_fast"]),
+        "wema_slow": _last(fac["wema_slow"]),
+        "obv":       _last(fac["obv_raw"]),
+        "obv_ema":   _last(fac["obv_ema"]),
+    }
+
     return {"close": c, "atr": a, "atr_pct": atr_pct, "rsi": rsi_val,
             "adx": adx_val, "rs_pct": rs_val, "factors": factors,
             "score": int(score), "trio_pass": bool(trio), "action": action,
@@ -772,7 +786,8 @@ def score_ticker(df, bench_df, is_benchmark=False):
             "backtest": bt_stats,
             "bonus_rsi_slope": bonus_rsi_slope,
             "bonus_atr_expansion": bonus_atr_expansion,
-            "momentum_bonus": momentum_bonus}
+            "momentum_bonus": momentum_bonus,
+            "raw_indicators": raw_indicators}
 
 
 # ============================================================================
