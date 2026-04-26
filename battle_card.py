@@ -563,10 +563,17 @@ def _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, start_i, end_i):
 
     for i in range(start_i, min(end_i, len(df) - 1)):
         if in_trade:
-            if lo_a[i + 1] <= stop_loss:
-                _close(stop_loss)
-            elif hi_a[i + 1] >= take_profit:
-                _close(take_profit)
+            nxt_op = op_a[i + 1]
+            nxt_lo = lo_a[i + 1]
+            nxt_hi = hi_a[i + 1]
+            if nxt_op <= stop_loss:
+                _close(nxt_op)                  # gap-down past stop: fill at open
+            elif nxt_op >= take_profit:
+                _close(nxt_op)                  # gap-up past target: fill at open
+            elif nxt_lo <= stop_loss:
+                _close(stop_loss)               # intraday stop touch
+            elif nxt_hi >= take_profit:
+                _close(take_profit)             # intraday target touch
             continue
 
         if limit_order_active:
