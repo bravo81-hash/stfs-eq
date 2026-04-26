@@ -607,7 +607,18 @@ def run_mini_backtest(df, bench_df):
     total = len(all_trades)
     wr = (wins / total * 100) if total > 0 else 0.0
     comp = (((1 + pd.Series(all_trades)).prod() - 1) * 100) if total > 0 else 0.0
-    return {"trades": total, "wins": wins, "win_rate": wr, "compounded": comp}
+    # Expectancy in R units: (avg trade %) / (avg loss % magnitude)
+    # Using STOP_ATR_MULT vs TARGET_ATR_MULT geometry, target is +1.6R, stop is -1R.
+    # So normalise by avg_loss magnitude to express in R.
+    if total > 0:
+        avg = sum(all_trades) / total
+        losses = [t for t in all_trades if t < 0]
+        avg_loss_mag = (-sum(losses) / len(losses)) if losses else 0.01
+        expectancy_R = avg / avg_loss_mag if avg_loss_mag > 0 else 0.0
+    else:
+        expectancy_R = 0.0
+    return {"trades": total, "wins": wins, "win_rate": wr,
+            "compounded": comp, "expectancy_R": expectancy_R}
 
 
 def score_ticker(df, bench_df, is_benchmark=False):
@@ -670,11 +681,28 @@ def score_ticker(df, bench_df, is_benchmark=False):
     # Always attach historic backtest result!
     bt_stats = run_mini_backtest(df, bench_df)
 
+    # Bonus factors (Pine Momentum Panel v3) — additive, third-tier tie-break.
+    bonus_rsi_slope = False
+    if len(rs) > C.BONUS_RSI_SLOPE_LOOKBACK:
+        bonus_rsi_slope = bool(rs.iloc[-1] > rs.iloc[-1 - C.BONUS_RSI_SLOPE_LOOKBACK])
+    atr_fast = atr(hi, lo, cl, C.BONUS_ATR_FAST)
+    atr_slow = atr(hi, lo, cl, C.BONUS_ATR_SLOW)
+    bonus_atr_expansion = False
+    if len(atr_slow.dropna()) and atr_slow.iloc[-1] > 0:
+        af_pct = (atr_fast.iloc[-1] / cl.iloc[-1]) * 100
+        as_pct = (atr_slow.iloc[-1] / cl.iloc[-1]) * 100
+        if as_pct > 0:
+            bonus_atr_expansion = bool((af_pct / as_pct) > C.BONUS_ATR_EXPANSION_MIN)
+    momentum_bonus = int(bonus_rsi_slope) + int(bonus_atr_expansion)
+
     return {"close":c,"atr":a,"atr_pct":float(atr_pct),"rsi":rsi_val,
             "adx":adx_val,"rs_pct":rs_val,"factors":factors,
             "score":int(score),"trio_pass":bool(trio),"action":action,
             "is_breakout": bool(c>=cl.iloc[-C.BREAKOUT_LOOKBACK:].max()),
-            "backtest": bt_stats}
+            "backtest": bt_stats,
+            "bonus_rsi_slope": bonus_rsi_slope,
+            "bonus_atr_expansion": bonus_atr_expansion,
+            "momentum_bonus": momentum_bonus}
 
 
 # ============================================================================
@@ -1224,12 +1252,27 @@ def render_card(r, detailed):
         f'<span class="fmark">{"✓" if ok else "✗"}</span></div>'
         for k,ok in r["factors"].items())
 
-    bt = r.get("backtest", {"trades": 0, "win_rate": 0.0, "compounded": 0.0})
+    bt = r.get("backtest", {"trades": 0, "win_rate": 0.0, "compounded": 0.0, "expectancy_R": 0.0})
     if bt["trades"] > 0:
         bt_col = "var(--green)" if bt["win_rate"] >= 60 else ("var(--amber)" if bt["win_rate"] >= 40 else "var(--red)")
-        bt_html = f"  ·  <span style='color:{bt_col};font-weight:700'>BT: {bt['win_rate']:.1f}% Win ({bt['trades']} trades, {bt['compounded']:.0f}% Ret)</span>"
+        exp_R = bt.get("expectancy_R", 0.0)
+        thin_tag = " <span style='color:var(--amber)'>(thin)</span>" if r.get("thin_history") else ""
+        bt_html = (f"  ·  <span style='color:{bt_col};font-weight:700'>BT: "
+                   f"{bt['win_rate']:.1f}% Win · {exp_R:+.2f}R · {bt['trades']} trades · "
+                   f"{bt['compounded']:.0f}% Ret</span>{thin_tag}")
     else:
         bt_html = "  ·  <span style='color:var(--muted)'>BT: N/A</span>"
+
+    quality = r.get("quality")
+    q_html = ""
+    if quality is not None:
+        q_col = ("var(--green)" if quality >= 0.7 else
+                 "var(--amber)" if quality >= 0.4 else "var(--muted)")
+        q_html = (f"  ·  <span style='color:{q_col};font-weight:700'>"
+                  f"Q {quality:.2f}</span>")
+
+    mb = r.get("momentum_bonus", 0)
+    mb_html = f"  ·  <span style='color:var(--cyan)'>+MB {mb}</span>" if mb > 0 else ""
 
     header = f"""
 <div class="card {cc}">
@@ -1237,7 +1280,7 @@ def render_card(r, detailed):
     <div>
       <span class="ticker">{ticker}</span>
       <span class="tmeta">  {r.get('industry','')}  ·  ${r['close']:.2f}
-        · ATR {r['atr']:.2f} ({r['atr_pct']:.1f}%)  · RSI {r['rsi']:.0f}  · ADX {r['adx']:.0f}{bt_html}</span>
+        · ATR {r['atr']:.2f} ({r['atr_pct']:.1f}%)  · RSI {r['rsi']:.0f}  · ADX {r['adx']:.0f}{bt_html}{q_html}{mb_html}</span>
     </div>
     <div>
       <span class="spill {sc}">Score {score}/8</span>
@@ -1323,6 +1366,69 @@ def render_html(ctx):
             'border-radius:3px;padding:1px 6px;margin-left:8px">TWS FALLBACK</span>'
         )
 
+    auto = ctx.get("auto_regime")
+    auto_html = ""
+    if auto:
+        st = auto["states"]
+        macro = auto["macro"]
+        rrg = auto.get("rrg") or {}
+        conf_color = {"HIGH": "var(--green)", "MED": "var(--amber)", "LOW": "var(--red)"}.get(
+            auto["confidence"], "var(--muted)")
+        evid_rows = "".join(
+            f"<tr><td>{html.escape(str(k))}</td><td>{v if v is not None else '—'}</td>"
+            f"<td style='color:var(--muted)'>{src}</td>"
+            f"<td style='color:{'var(--red)' if age >= C.STALENESS_BARS_WARN else 'var(--muted)'}'>"
+            f"{age}d</td></tr>"
+            for (k, v, src, age) in auto.get("evidence", [])
+        )
+        rrg_rows = "".join(
+            f"<tr><td>{s}</td><td>{r['x']:+.2f}</td><td>{r['y']:+.2f}</td><td>{r['quad']}</td></tr>"
+            for s, r in rrg.items()
+        )
+        warn_html = ""
+        if auto.get("warnings"):
+            warn_html = "<div style='color:var(--amber);font-size:11px;margin-top:6px'>⚠ " + \
+                        " · ".join(html.escape(w) for w in auto["warnings"]) + "</div>"
+        auto_html = f"""
+<details class="card" style="padding:10px 20px;margin:10px 0">
+  <summary style="cursor:pointer;font-weight:700">
+    ▸ AUTO-REGIME EVIDENCE — confidence
+    <span style="color:{conf_color}">{auto['confidence']}</span>
+  </summary>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:10px">
+    <div>
+      <div style="font-weight:600;color:var(--muted);font-size:11px">CONTEXT STATES</div>
+      <table class="drop"><tbody>
+        <tr><td>drift</td><td><b>{st['drift']}</b></td></tr>
+        <tr><td>vol</td><td><b>{st['vol']}</b></td></tr>
+        <tr><td>term</td><td><b>{st['term']}</b></td></tr>
+        <tr><td>skew</td><td><b>{st['skew']}</b></td></tr>
+        <tr><td>credit</td><td><b>{st['credit']}</b></td></tr>
+        <tr><td>event</td><td><b>{st['event']}</b></td></tr>
+      </tbody></table>
+    </div>
+    <div>
+      <div style="font-weight:600;color:var(--muted);font-size:11px">MACRO ROTATION</div>
+      <table class="drop"><tbody>
+        <tr><td>risk_off</td><td>{'✓' if macro['is_risk_off'] else '·'}</td></tr>
+        <tr><td>reflation</td><td>{'✓' if macro['is_reflation'] else '·'}</td></tr>
+        <tr><td>liquidity</td><td>{'✓' if macro['is_liquidity'] else '·'}</td></tr>
+      </tbody></table>
+    </div>
+    <div>
+      <div style="font-weight:600;color:var(--muted);font-size:11px">SECTOR RRG (vs SPY)</div>
+      <table class="drop"><thead><tr><th>sym</th><th>x</th><th>y</th><th>quad</th></tr></thead>
+      <tbody>{rrg_rows}</tbody></table>
+    </div>
+    <div>
+      <div style="font-weight:600;color:var(--muted);font-size:11px">FEEDS / FRESHNESS</div>
+      <table class="drop"><thead><tr><th>feed</th><th>last</th><th>src</th><th>age</th></tr></thead>
+      <tbody>{evid_rows}</tbody></table>
+    </div>
+  </div>
+  {warn_html}
+</details>"""
+
     header = f"""
 <div class="hdr">
   <div class="hdr-row">
@@ -1331,11 +1437,12 @@ def render_html(ctx):
     </div>
     <div style="display:flex;align-items:center;gap:8px">
       <span class="rbadge r-{regime}">{regime.replace('_',' ')}</span>
+      {('<span style="font-size:10px;font-weight:700;color:var(--cyan);border:1px solid var(--cyan);border-radius:3px;padding:1px 6px;margin-left:8px">AUTO</span>' if auto else '')}
       {tws_badge_html}
     </div>
   </div>
   <div class="hdr-meta">{acc_meta}</div>
-</div>"""
+</div>{auto_html}"""
 
     if ctx.get("cash_only"):
         return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -1468,16 +1575,77 @@ def render_html(ctx):
 
 
 # ============================================================================
+# COMPOSITE QUALITY RANKING
+# ============================================================================
+
+def _norm(values):
+    """Min-max normalize to [0,1]. All-equal → 0.5."""
+    if not values:
+        return []
+    vmin, vmax = min(values), max(values)
+    if vmax - vmin < 1e-9:
+        return [0.5] * len(values)
+    return [(v - vmin) / (vmax - vmin) for v in values]
+
+
+def _attach_quality(results):
+    """Compute composite `quality` per result using config.RANKING_WEIGHTS.
+    Adds 'quality' (0..1) and 'thin_history' (bool) keys in-place."""
+    if not results:
+        return
+    w = C.RANKING_WEIGHTS
+    scores      = [r["score"] / 8.0 for r in results]
+    win_rates   = [r["backtest"]["win_rate"] / 100.0 for r in results]
+    expectancies= [r["backtest"].get("expectancy_R", 0.0) for r in results]
+    n_trades    = [min(r["backtest"]["trades"], C.N_TRADES_CAP) for r in results]
+    rs_pcts     = [r["rs_pct"] for r in results]
+
+    n_score   = _norm(scores)
+    n_wr      = _norm(win_rates)
+    n_exp     = _norm(expectancies)
+    n_trd     = _norm(n_trades)
+    n_rs      = _norm(rs_pcts)
+
+    for i, r in enumerate(results):
+        q = (w["score"]      * n_score[i]
+           + w["win_rate"]   * n_wr[i]
+           + w["expectancy"] * n_exp[i]
+           + w["n_trades"]   * n_trd[i]
+           + w["rs_pct"]     * n_rs[i])
+        thin = r["backtest"]["trades"] < C.THIN_HISTORY_TRADES
+        if thin:
+            q *= (1.0 - C.THIN_HISTORY_PENALTY)
+        r["quality"] = round(q, 4)
+        r["thin_history"] = thin
+
+
+# ============================================================================
 # MAIN PIPELINE
 # ============================================================================
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("regime", choices=list(C.WATCHLISTS.keys()))
+    parser.add_argument("regime", choices=list(C.WATCHLISTS.keys()) + ["AUTO"])
     parser.add_argument("--no-open", action="store_true")
     args = parser.parse_args()
 
-    regime = args.regime; ts = date.today().isoformat()
+    auto_evidence = None
+    if args.regime == "AUTO":
+        try:
+            from regime import detect_regime
+            auto_evidence = detect_regime()
+            regime = auto_evidence["regime"]
+            print(f"\n  AUTO-REGIME: {regime} (confidence {auto_evidence['confidence']})")
+            print(f"  States: {auto_evidence['states']}")
+            if auto_evidence["warnings"]:
+                for w in auto_evidence["warnings"]:
+                    print(f"  ⚠  {w}")
+        except Exception as e:
+            print(f"  ✗ AUTO-regime failed: {e} — falling back to NEUTRAL")
+            regime = "NEUTRAL"
+    else:
+        regime = args.regime
+    ts = date.today().isoformat()
     tws_live = _tws_connected()
     data_src = "TWS+yfinance" if tws_live else "yfinance/Finnhub"
     print(f"\n{'='*60}\n  STFS-EQ v2.0  ·  {regime}  ·  {ts}  ·  {data_src}\n{'='*60}\n")
@@ -1498,7 +1666,8 @@ def main():
     if regime == "CRASH":
         ctx = {"regime":regime,"timestamp":ts,"cash_only":True,
                "strong":[],"watch":[],"skip":[],"dropped":[],"universe_size":0,
-               "tws_active":tws_live,"tws_positions":tws_positions}
+               "tws_active":tws_live,"tws_positions":tws_positions,
+               "auto_regime":auto_evidence}
         out_path.write_text(render_html(ctx))
         print("  ⛔ CRASH — cash only. No trades.")
         if C.AUTO_OPEN_IN_BROWSER and not args.no_open:
@@ -1566,9 +1735,11 @@ def main():
         info["industry"] = profiles.get(t,{}).get("industry","")
         results.append(info)
 
+    _attach_quality(results)
     strong = sorted([r for r in results if r["action"]=="STRONG BUY"],
-                    key=lambda x:(-x["score"],-x["rs_pct"]))
-    watch  = sorted([r for r in results if r["action"]=="WATCH"],  key=lambda x:-x["score"])
+                    key=lambda x:(-x["quality"], -x["score"], -x["rs_pct"]))
+    watch  = sorted([r for r in results if r["action"]=="WATCH"],
+                    key=lambda x:(-x["quality"], -x["score"]))
     skip   = sorted([r for r in results if r["action"]=="SKIP"],   key=lambda x:-x["score"])
 
     # Stage 3: trade construction — only for STRONG BUY
@@ -1600,7 +1771,8 @@ def main():
 
     ctx = {"regime":regime,"timestamp":ts,"universe_size":len(watchlist),
            "strong":strong,"watch":watch,"skip":skip,"dropped":dropped,
-           "tws_active":tws_live,"tws_positions":tws_positions}
+           "tws_active":tws_live,"tws_positions":tws_positions,
+           "auto_regime":auto_evidence}
     out_path.write_text(render_html(ctx))
     print(f"\n  ▸ Battle card: {out_path}")
 

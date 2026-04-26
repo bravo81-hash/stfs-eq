@@ -32,8 +32,9 @@ and right-click → Transmits in TWS — no auto-execution ever.
 |------|---------|
 | `config.py` | **Single source of truth for all parameters.** Edit only here. |
 | `launcher.py` | Tkinter GUI entry point. Starts order server + battle card subprocess. |
-| `battle_card.py` | Core scoring, trade sizing, options plan building, HTML generation. |
-| `tws_data.py` | TWS API calls: OHLC, IVP, live price, options chain. clientId=15 (readonly). |
+| `battle_card.py` | Core scoring, composite-quality ranking, trade sizing, options plans, HTML. |
+| `regime.py` | Auto-regime detection (drift/vol/term/skew/credit/event + sector RRG). |
+| `tws_data.py` | TWS API calls: OHLC, IVP, live price, options chain, index feeds. clientId=15 (readonly). |
 | `order_server.py` | HTTP order API. clientId=16 (read-write). localhost:5001. |
 | `backtest.py` | Walk-forward mini-backtest embedded in each battle card entry. |
 | `optimizer.py` | Parameter sweep: finds optimal ENTRY/STOP/TARGET ATR multiples. |
@@ -74,6 +75,27 @@ the contract to get today's live price for ATM strike selection. Falls back to d
 ### All orders HELD (transmit=False)
 Every order — parent, take-profit, stop-loss, options — has `transmit=False`.
 The user manually transmits in TWS. Do not change this.
+
+### Auto-regime detection (`regime.py`)
+`detect_regime()` returns `{regime, confidence, states, macro, rrg, evidence, warnings}`.
+- Six context states from STFS v2.5.pine (drift/vol/term/skew/credit/event).
+- Sector RRG quadrants from MacroNexus_sector rotation.pine (XLU/XLP/XLK/XLE/XLF/SMH/QQQ/IWM vs SPY).
+- Routes to one of the existing `WATCHLISTS` keys (CRASH/RISK_OFF/LIQUIDITY/REFLATION/GOLDILOCKS/NEUTRAL).
+- TWS-first via `tws_data.get_index()`; yfinance fallback per feed.
+- Staleness: each feed records `age_days`; ≥`STALENESS_BARS_WARN` → confidence MED/LOW.
+- Invoked when battle_card receives `--regime AUTO` (the launcher default).
+
+### Composite quality ranking
+`battle_card._attach_quality()` produces a 0–1 `quality` score combining:
+`0.35 * score + 0.25 * win_rate + 0.20 * expectancy_R + 0.10 * n_trades + 0.10 * rs_pct`
+Weights live in `config.RANKING_WEIGHTS`. Tickers with `bt_n_trades < THIN_HISTORY_TRADES`
+take a `THIN_HISTORY_PENALTY` haircut (default 15%) and show a `(thin)` tag in HTML.
+Sort order is now `quality DESC, score DESC, rs_pct DESC` — score-only sort is retired.
+
+### Bonus momentum factors (Pine v3 — additive, not part of core 8)
+`bonus_rsi_slope` (RSI[0] > RSI[3]) and `bonus_atr_expansion`
+(ATR%(10) / ATR%(60) > 1.10) are stored on every score result as `momentum_bonus` (0..2).
+Displayed as `+MB N` in HTML. They do NOT change the 8-factor score / STRONG-BUY gate.
 
 ### TWS ticker aliases
 `_TWS_TICKER = {"BRK-B": "BRK B", "BRK-A": "BRK A"}` exists in both `tws_data.py`

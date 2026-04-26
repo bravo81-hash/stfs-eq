@@ -146,6 +146,83 @@ WATCHLISTS = {
 }
 
 # =====================================================================
+# AUTO-REGIME DETECTION (regime.py)
+# Thresholds ported from STFS v2.5.pine + MacroNexus_sector rotation.pine
+# =====================================================================
+
+# Drift state: 10-day SPY pct return
+DRIFT_STRONG_UP = 3.0    # > 3%
+DRIFT_MILD_UP   = 1.0    # > 1%
+DRIFT_MILD_DN   = -1.0   # < -1%
+DRIFT_STRONG_DN = -3.0   # < -3%
+
+# Vol state: ATR%(10) / ATR%(60) on SPY
+VOL_EXPANDING  = 1.30    # > 1.30
+VOL_COMPRESSED = 0.80    # < 0.80
+
+# Term structure: VIX / VIX3M
+TERM_BACKWARDATION = 1.00   # > 1.00
+TERM_CONTANGO      = 0.95   # < 0.95
+
+# SKEW (CBOE)
+SKEW_CRASH_FEAR = 140.0     # > 140
+SKEW_COMPLACENT = 120.0     # < 120
+
+# Credit stress: HYG 5d %
+CREDIT_STRESSED = -1.0      # < -1%
+CREDIT_BID      =  1.0      # >  1%
+
+# Event premium: VIX9D / VIX
+EVENT_PRICED_IN = 1.05      # > 1.05
+
+# Sector RRG lookback
+RRG_TREND_LOOKBACK    = 20
+RRG_MOMENTUM_LOOKBACK = 5
+
+# Sectors / macro feeds (yfinance symbols; TWS uses bare symbol w/ index secType)
+REGIME_FEEDS = {
+    "SPY":   "SPY",
+    "QQQ":   "QQQ",
+    "IWM":   "IWM",
+    "XLU":   "XLU",
+    "XLP":   "XLP",
+    "XLK":   "XLK",
+    "XLE":   "XLE",
+    "XLF":   "XLF",
+    "SMH":   "SMH",
+    "BTC":   "BTC-USD",
+    "VIX":   "^VIX",
+    "VIX3M": "^VIX3M",
+    "VIX9D": "^VIX9D",
+    "SKEW":  "^SKEW",
+    "HYG":   "HYG",
+}
+
+STALENESS_BARS_WARN = 2     # ≥2 bars stale → confidence LOW
+
+# =====================================================================
+# RANKING — composite quality score (battle_card.py)
+# =====================================================================
+RANKING_WEIGHTS = {
+    "score":      0.35,    # 8-factor score / 8
+    "win_rate":   0.25,    # historical mini-backtest win%
+    "expectancy": 0.20,    # avg R per trade
+    "n_trades":   0.10,    # robustness (capped at 20)
+    "rs_pct":     0.10,    # current RS vs benchmark
+}
+THIN_HISTORY_TRADES   = 5     # < this many bt trades → penalize
+THIN_HISTORY_PENALTY  = 0.15  # 15% composite haircut
+N_TRADES_CAP          = 20    # for normalization
+
+# =====================================================================
+# BONUS FACTORS (Pine Momentum Panel v3 — additive, not part of core 8)
+# =====================================================================
+BONUS_RSI_SLOPE_LOOKBACK = 3      # RSI[0] > RSI[3]
+BONUS_ATR_FAST           = 10
+BONUS_ATR_SLOW           = 60
+BONUS_ATR_EXPANSION_MIN  = 1.10   # ATR%(10) / ATR%(60) > 1.10
+
+# =====================================================================
 # OUTPUT
 # =====================================================================
 OUTPUT_DIR          = "output"

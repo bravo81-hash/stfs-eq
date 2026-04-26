@@ -37,6 +37,7 @@ PURPLE    = "#a060ff"
 CYAN      = "#00d4ff"
 
 REGIME_CONFIG = {
+    "AUTO":       {"color": CYAN,   "label": "AUTO",        "desc": "Detect regime live"},
     "GOLDILOCKS": {"color": GREEN,  "label": "GOLDILOCKS",  "desc": "Low vol · Growth / Tech"},
     "LIQUIDITY":  {"color": PURPLE, "label": "LIQUIDITY",   "desc": "USD weak · High-beta"},
     "REFLATION":  {"color": AMBER,  "label": "REFLATION",   "desc": "Rates up · Cyclicals"},
@@ -86,7 +87,7 @@ class STFSApp(tk.Tk):
         self.resizable(False, False)
 
         # State
-        self.selected_regime = tk.StringVar(value="")
+        self.selected_regime = tk.StringVar(value="AUTO")
         self.api_key_var     = tk.StringVar(value=load_api_key())
         self.show_key        = False
         self.running         = False
@@ -181,6 +182,9 @@ class STFSApp(tk.Tk):
             btn.grid(row=row, column=col, padx=4, pady=4, sticky="nsew")
             self.regime_buttons[key] = btn
             reg_frame.columnconfigure(col, weight=1)
+
+        # Default-select AUTO so users can hit Run immediately.
+        self._select_regime("AUTO")
 
         # ── divider ──────────────────────────────────────────────────────────
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=16, pady=8)

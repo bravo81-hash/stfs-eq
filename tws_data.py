@@ -384,6 +384,53 @@ def get_positions() -> "list | None":
         return None
 
 
+def get_index(symbol: str, lookback_days: int = 120) -> "pd.DataFrame | None":
+    """
+    Fetch index/ETF history via TWS for regime detection feeds.
+    Index symbols (VIX, VIX3M, VIX9D, SKEW) use Index secType on CBOE.
+    ETFs (HYG, sector ETFs) route through Stock SMART.
+    Returns DataFrame(Open,High,Low,Close,Volume) or None — caller falls back to yfinance.
+    """
+    if not tws_connected():
+        return None
+    try:
+        from ib_insync import Index, Stock, util
+    except ImportError:
+        return None
+
+    sym = symbol.lstrip("^").upper()
+    is_index = sym in {"VIX", "VIX3M", "VIX9D", "SKEW", "SPX", "NDX", "RUT"}
+    try:
+        contract = Index(sym, "CBOE", "USD") if is_index else Stock(sym, "SMART", "USD")
+        what = "TRADES"
+        if is_index:
+            what = "TRADES"   # CBOE indices return TRADES bars
+        bars = _ib.reqHistoricalData(
+            contract,
+            endDateTime="",
+            durationStr=f"{lookback_days} D",
+            barSizeSetting="1 day",
+            whatToShow=what,
+            useRTH=True,
+            formatDate=1,
+            keepUpToDate=False,
+        )
+        if not bars:
+            return None
+        df = util.df(bars)
+        df.index = pd.to_datetime(df["date"])
+        df.index.name = None
+        df = df.rename(columns={
+            "open": "Open", "high": "High", "low": "Low",
+            "close": "Close", "volume": "Volume",
+        })
+        cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
+        df = df[cols].dropna(subset=["Close"])
+        return df if not df.empty else None
+    except Exception:
+        return None
+
+
 def get_options_data(ticker: str, df: "pd.DataFrame") -> "dict | None":
     """
     Fetch options chain via TWS and compute IVP + structure selection.
