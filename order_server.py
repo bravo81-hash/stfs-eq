@@ -82,7 +82,7 @@ def _place_shares(data: dict) -> dict:
         parent.tif = "OPG"           # Market-on-Open
     else:
         parent = LimitOrder("BUY", shares, round(entry, 2))
-        parent.tif = "DAY"
+        parent.tif = "GTC"           # Good-till-cancelled — survives pre-market setup workflow
     parent.orderId  = p_id
     parent.account  = account
     parent.transmit = False          # HELD — no auto-execution
