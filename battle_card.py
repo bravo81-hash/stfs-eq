@@ -877,9 +877,14 @@ h2{font-family:var(--font-head);font-size:16px;margin:20px 0 12px}
 .c-skip{border-left:3px solid var(--muted);opacity:.6}
 .c-cash{border-left:3px solid var(--red)}
 .card-hdr{display:flex;justify-content:space-between;align-items:baseline;
-  margin-bottom:10px;flex-wrap:wrap;gap:8px}
+  margin-bottom:6px;flex-wrap:wrap;gap:8px}
 .ticker{font-size:18px;font-weight:700;letter-spacing:1px}
 .tmeta{font-size:11px;color:var(--muted)}
+.card-stats{display:flex;flex-direction:column;gap:3px;margin-bottom:8px;font-size:11px}
+.stat-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.stat-lbl{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.06em;
+  min-width:50px;flex-shrink:0}
+.stat-val{font-weight:600}
 /* SCORE PILL */
 .spill{display:inline-block;padding:2px 10px;border-radius:10px;font-weight:700;font-size:12px}
 .s8,.s7{background:var(--green);color:#000}
@@ -1389,7 +1394,7 @@ def render_card(r, detailed):
         for k,ok in r["factors"].items())
 
     bt = r.get("backtest", {})
-    thin_tag = " <span style='color:var(--amber)'>(thin)</span>" if r.get("thin_history") else ""
+    thin_tag = " <span style='color:var(--amber)'>\u26a0 thin data</span>" if r.get("thin_history") else ""
     nf = bt.get("n_folds_with_data", 0)
     if nf > 0:
         mwr  = bt["mean_wr"]
@@ -1398,30 +1403,38 @@ def render_card(r, detailed):
         sexp = bt.get("std_expR", 0.0)
         con  = bt.get("consistent_folds", 0)
         bt_col = "var(--green)" if mwr >= 60 else ("var(--amber)" if mwr >= 40 else "var(--red)")
-        swr_s  = f"±{swr:.0f}"  if swr  >= 0.5  else ""
-        sexp_s = f"±{sexp:.2f}" if sexp >= 0.01 else ""
-        bt_html = (f"  ·  <span style='color:{bt_col};font-weight:700'>"
-                   f"BT: {mwr:.0f}{swr_s}% WR · {mexp:+.2f}{sexp_s}R · "
-                   f"{con}/{nf} folds</span>{thin_tag}")
+        swr_s  = f"\u00b1{swr:.0f}pp"  if swr  >= 0.5  else ""
+        sexp_s = f" \u00b1{sexp:.2f}" if sexp >= 0.01 else ""
+        bt_html = (f"<span style='color:{bt_col};font-weight:600'>"
+                   f"Win {mwr:.0f}%{swr_s}</span>"
+                   f" · <span style='color:{bt_col}'>Expect {mexp:+.2f}R{sexp_s}</span>"
+                   f" · {con}/{nf} folds profitable{thin_tag}")
         rec = bt.get("recent", {})
+        rec_html = ""
         if rec.get("trades", 0) > 0:
             rc = "var(--green)" if rec["win_rate"] >= 60 else ("var(--amber)" if rec["win_rate"] >= 40 else "var(--red)")
-            bt_html += (f"  ·  <span style='color:{rc};font-size:11px'>"
-                        f"1yr: {rec['win_rate']:.0f}% WR · {rec.get('expectancy_R',0):+.2f}R"
-                        f" n={rec['trades']}</span>")
+            rec_html = (f"<div class='stat-row'>"
+                        f"<span class='stat-lbl'>RECENT</span>"
+                        f"<span style='color:{rc};font-weight:600'>"
+                        f"Win {rec['win_rate']:.0f}%</span>"
+                        f" · <span style='color:{rc}'>Expect {rec.get('expectancy_R',0):+.2f}R</span>"
+                        f" · {rec['trades']} trades in last year"
+                        f"</div>")
     else:
-        bt_html = "  ·  <span style='color:var(--muted)'>BT: N/A</span>"
+        bt_html = "<span style='color:var(--muted)'>No backtest data</span>"
+        rec_html = ""
 
     quality = r.get("quality")
     q_html = ""
     if quality is not None:
         q_col = ("var(--green)" if quality >= 0.7 else
                  "var(--amber)" if quality >= 0.4 else "var(--muted)")
-        q_html = (f"  ·  <span style='color:{q_col};font-weight:700'>"
-                  f"Q {quality:.2f}</span>")
+        q_word = "High" if quality >= 0.7 else ("Mid" if quality >= 0.4 else "Low")
+        q_html = (f" · <span style='color:{q_col};font-weight:700'>"
+                  f"Quality {q_word} ({quality:.0%})</span>")
 
     mb = r.get("momentum_bonus", 0)
-    mb_html = f"  ·  <span style='color:var(--cyan)'>+MB {mb}</span>" if mb > 0 else ""
+    mb_html = f" · <span style='color:var(--cyan)'>Momentum +{mb}</span>" if mb > 0 else ""
 
     # Earnings proximity badge — amber within WARN_DAYS, red within BLACKOUT_DAYS
     # (gate already excludes the latter, but kept defensive for manual overrides).
@@ -1432,30 +1445,49 @@ def render_card(r, detailed):
             d_ahead = (date.fromisoformat(edate) - date.today()).days
             if 0 <= d_ahead <= C.EARNINGS_WARN_DAYS:
                 col = "var(--red)" if d_ahead <= C.EARNINGS_BLACKOUT_DAYS else "var(--amber)"
-                earn_html = (f"  ·  <span style='color:{col};font-weight:700'>"
-                             f"EARN {edate} ({d_ahead}d)</span>")
+                earn_html = (f"<div class='stat-row' style='margin-top:2px'>"
+                             f"<span class='stat-lbl'>\u26a0 EARN</span>"
+                             f"<span style='color:{col};font-weight:700'>"
+                             f"Earnings {edate} ({d_ahead} days away)</span></div>")
         except Exception:
             pass
 
     # Data source badge — green for TWS (live/verified), amber for yfinance
     src = r.get("data_source", "yf")
     src_col  = "var(--green)" if src == "TWS" else "var(--amber)"
-    src_html = (f"  ·  <span style='background:{src_col};color:#080c12;"
+    src_tip  = "Live data" if src == "TWS" else "Delayed \u2014 verify on TradingView"
+    src_html = (f"<span style='background:{src_col};color:#080c12;"
                 f"padding:1px 5px;border-radius:3px;font-size:10px;"
-                f"font-weight:700'>{src}</span>")
+                f"font-weight:700' title='{src_tip}'>{src}</span>")
 
     header = f"""
 <div class="card {cc}">
   <div class="card-hdr">
     <div>
       <span class="ticker">{ticker}</span>
-      <span class="tmeta">  {r.get('industry','')}  ·  ${r['close']:.2f}
-        · ATR {r['atr']:.2f} ({r['atr_pct']:.1f}%)  · RSI {r['rsi']:.0f}  · ADX {r['adx']:.0f}{bt_html}{q_html}{mb_html}{earn_html}{src_html}</span>
+      <span class="tmeta">{r.get('industry','')}</span>
+      {src_html}
     </div>
     <div>
       <span class="spill {sc}">Score {score}/8</span>
       <span style="color:{tc};margin-left:8px;font-size:11px;font-weight:700">TRIO {trio}</span>
     </div>
+  </div>
+  <div class="card-stats">
+    <div class="stat-row">
+      <span class="stat-lbl">PRICE</span>
+      <span class="stat-val">${r['close']:.2f}</span>
+      · ATR ${r['atr']:.2f} ({r['atr_pct']:.1f}%)
+      · RSI {r['rsi']:.0f}
+      · ADX {r['adx']:.0f}
+      {q_html}{mb_html}
+    </div>
+    <div class="stat-row">
+      <span class="stat-lbl">BT ALL</span>
+      {bt_html}
+    </div>
+    {rec_html}
+    {earn_html}
   </div>
   <div class="fgrid">{fgrid}</div>
   {_raw_indicators_html(r)}"""
