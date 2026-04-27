@@ -277,6 +277,59 @@ class STFSApp(tk.Tk):
         # ── divider ──────────────────────────────────────────────────────────
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=16, pady=8)
 
+        # ── trade journal ────────────────────────────────────────────────────
+        tk.Label(self, text="TRADE JOURNAL", bg=BG, fg=MUTED,
+                 font=("Courier", 10)).pack(anchor="w", padx=16)
+
+        jnl_frame = tk.Frame(self, bg=BG)
+        jnl_frame.pack(fill="x", padx=16, pady=6)
+
+        # Row 1: Log an outcome
+        tk.Label(jnl_frame, text="Ticker:", bg=BG, fg=MUTED,
+                 font=("Courier", 10)).pack(side="left")
+        self.jnl_ticker_var = tk.StringVar()
+        tk.Entry(jnl_frame, textvariable=self.jnl_ticker_var, width=7,
+                 bg=BG2, fg=TEXT, insertbackground=TEXT,
+                 bd=0, highlightthickness=1, highlightcolor=BORDER,
+                 highlightbackground=BORDER,
+                 font=("Courier", 12)).pack(side="left", padx=(4, 10), ipady=5)
+
+        tk.Label(jnl_frame, text="Exit date:", bg=BG, fg=MUTED,
+                 font=("Courier", 10)).pack(side="left")
+        self.jnl_date_var = tk.StringVar()
+        tk.Entry(jnl_frame, textvariable=self.jnl_date_var, width=11,
+                 bg=BG2, fg=TEXT, insertbackground=TEXT,
+                 bd=0, highlightthickness=1, highlightcolor=BORDER,
+                 highlightbackground=BORDER,
+                 font=("Courier", 12)).pack(side="left", padx=(4, 10), ipady=5)
+
+        tk.Label(jnl_frame, text="Exit $:", bg=BG, fg=MUTED,
+                 font=("Courier", 10)).pack(side="left")
+        self.jnl_price_var = tk.StringVar()
+        tk.Entry(jnl_frame, textvariable=self.jnl_price_var, width=8,
+                 bg=BG2, fg=TEXT, insertbackground=TEXT,
+                 bd=0, highlightthickness=1, highlightcolor=BORDER,
+                 highlightbackground=BORDER,
+                 font=("Courier", 12)).pack(side="left", padx=(4, 10), ipady=5)
+
+        self.jnl_log_btn = tk.Button(
+            jnl_frame, text="📝 LOG OUTCOME", command=self._log_outcome,
+            bg=BG2, fg=AMBER, font=("Courier", 10, "bold"), bd=0,
+            cursor="hand2", padx=10, pady=4,
+            activebackground=BG3, activeforeground=AMBER, relief="flat"
+        )
+        self.jnl_log_btn.pack(side="left", padx=(0, 8))
+
+        tk.Button(
+            jnl_frame, text="📊 ANALYZE JOURNAL", command=self._analyze_journal,
+            bg=BG2, fg=PURPLE, font=("Courier", 10, "bold"), bd=0,
+            cursor="hand2", padx=10, pady=4,
+            activebackground=BG3, activeforeground=PURPLE, relief="flat"
+        ).pack(side="left")
+
+        # ── divider ──────────────────────────────────────────────────────────
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=16, pady=8)
+
         # ── progress log ─────────────────────────────────────────────────────
         tk.Label(self, text="OUTPUT", bg=BG, fg=MUTED,
                  font=("Courier", 10)).pack(anchor="w", padx=16)
@@ -632,6 +685,99 @@ class STFSApp(tk.Tk):
         self.bt_run_btn.config(state="normal", text="▶ RUN BACKTEST", bg=BG2)
         self.status_var.set("✓ Backtest complete")
         self._log("\n✓ Done.\n", "ok")
+
+    # ── journal ──────────────────────────────────────────────────────────────
+    def _log_outcome(self):
+        ticker = self.jnl_ticker_var.get().strip().upper()
+        edate  = self.jnl_date_var.get().strip()
+        price  = self.jnl_price_var.get().strip()
+
+        if not ticker:
+            self._log("Journal: enter a ticker.\n", "warn"); return
+        if not edate:
+            self._log("Journal: enter an exit date (YYYY-MM-DD).\n", "warn"); return
+        if not price:
+            self._log("Journal: enter an exit price.\n", "warn"); return
+        try:
+            float(price)
+        except ValueError:
+            self._log(f"Journal: '{price}' is not a valid price.\n", "err"); return
+
+        if not self.python_exe:
+            self._log("Python not ready.\n", "err"); return
+
+        LOG_SCRIPT = SCRIPT_DIR / "log_outcome.py"
+        if not LOG_SCRIPT.exists():
+            self._log(f"log_outcome.py not found.\n", "err"); return
+
+        self._clear_log()
+        self._log(f"▶  Logging outcome: {ticker}  {edate}  ${price}\n\n", "info")
+        cmd = [self.python_exe, str(LOG_SCRIPT), ticker, edate, price]
+
+        def worker():
+            try:
+                proc = subprocess.Popen(
+                    cmd, cwd=str(SCRIPT_DIR),
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1)
+                for line in proc.stdout:
+                    ls = line.strip()
+                    if "✓" in ls or "Realized R" in ls:
+                        self.after(0, lambda l=line: self._log(l, "ok"))
+                    elif "✗" in ls or "Error" in ls:
+                        self.after(0, lambda l=line: self._log(l, "err"))
+                    elif "⚠" in ls or "Matched" in ls or "Exit" in ls:
+                        self.after(0, lambda l=line: self._log(l, "warn"))
+                    else:
+                        self.after(0, lambda l=line: self._log(l))
+                proc.wait()
+                if proc.returncode == 0:
+                    self.after(0, lambda: self.status_var.set("✓ Outcome logged"))
+                    # Clear fields on success
+                    self.after(0, lambda: self.jnl_ticker_var.set(""))
+                    self.after(0, lambda: self.jnl_date_var.set(""))
+                    self.after(0, lambda: self.jnl_price_var.set(""))
+                else:
+                    self.after(0, lambda: self.status_var.set("✗ Log failed — see output"))
+            except Exception as e:
+                self.after(0, lambda: self._log(f"\n✗ Error: {e}\n", "err"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _analyze_journal(self):
+        if not self.python_exe:
+            self._log("Python not ready.\n", "err"); return
+
+        ANALYZE_SCRIPT = SCRIPT_DIR / "analyze_journal.py"
+        if not ANALYZE_SCRIPT.exists():
+            self._log(f"analyze_journal.py not found.\n", "err"); return
+
+        self._clear_log()
+        self._log("▶  Running journal analysis...\n\n", "info")
+
+        def worker():
+            try:
+                proc = subprocess.Popen(
+                    [self.python_exe, str(ANALYZE_SCRIPT)],
+                    cwd=str(SCRIPT_DIR),
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1)
+                for line in proc.stdout:
+                    ls = line.strip()
+                    if any(x in ls for x in ["Win rate", "Avg realized", "PASS", "✓"]):
+                        self.after(0, lambda l=line: self._log(l, "ok"))
+                    elif any(x in ls for x in ["OPEN", "⚠", "empty"]):
+                        self.after(0, lambda l=line: self._log(l, "warn"))
+                    elif "━" in ls or "╔" in ls or "╚" in ls or "╗" in ls:
+                        self.after(0, lambda l=line: self._log(l, "info"))
+                    else:
+                        self.after(0, lambda l=line: self._log(l))
+                proc.wait()
+                self.after(0, lambda: self.status_var.set("✓ Analysis complete"))
+            except Exception as e:
+                self.after(0, lambda: self._log(f"\n✗ Error: {e}\n", "err"))
+
+        threading.Thread(target=worker, daemon=True).start()
 
 
 # ── entry point ─────────────────────────────────────────────────────────────
