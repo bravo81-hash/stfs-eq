@@ -6,6 +6,7 @@ No terminal needed for daily use.
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -14,6 +15,8 @@ import webbrowser
 from pathlib import Path
 import tkinter as tk
 from tkinter import font as tkfont
+
+import config as C
 
 # ── paths ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -95,6 +98,12 @@ class STFSApp(tk.Tk):
         self.running         = False
         self.python_exe      = None
 
+        # Account settings vars — must exist before _build_ui appends to them
+        self.acc_equity_vars   = []
+        self.acc_risk_vars     = []
+        self.acc_notional_vars = []
+        self.acc_status_var    = tk.StringVar(value="")
+
         self._build_ui()
         self._check_python()
         self.after(100, self._center_window)
@@ -155,6 +164,59 @@ class STFSApp(tk.Tk):
                   bg=BG2, fg=GREEN, bd=0, cursor="hand2",
                   activebackground=BG3, activeforeground=GREEN,
                   font=("Courier", 10), padx=8, pady=4).pack(side="left", padx=4)
+
+        # ── account settings (collapsible) ───────────────────────────────────
+        self._acc_expanded = False
+        acc_hdr = tk.Frame(self, bg=BG)
+        acc_hdr.pack(fill="x", padx=16, pady=(8, 0))
+        self._acc_toggle_lbl = tk.Label(
+            acc_hdr, text="\u25b6 ACCOUNT SETTINGS", bg=BG, fg=MUTED,
+            font=("Courier", 10), cursor="hand2")
+        self._acc_toggle_lbl.pack(side="left")
+        self._acc_toggle_lbl.bind("<Button-1>", lambda e: self._toggle_accounts())
+
+        self._acc_frame = tk.Frame(self, bg=BG)
+        # Not packed initially — toggled on click
+
+        for i, acc in enumerate(C.ACCOUNTS):
+            row = tk.Frame(self._acc_frame, bg=BG)
+            row.pack(fill="x", pady=2)
+            tk.Label(row, text=f"{acc['name']:<8}", bg=BG, fg=TEXT,
+                     font=("Courier", 10), width=8).pack(side="left")
+            tk.Label(row, text="Equity $", bg=BG, fg=MUTED,
+                     font=("Courier", 10)).pack(side="left", padx=(8, 2))
+            eq_var = tk.StringVar(value=str(int(acc["equity"])))
+            tk.Entry(row, textvariable=eq_var, width=8, bg=BG2, fg=TEXT,
+                     insertbackground=TEXT, bd=0, highlightthickness=1,
+                     highlightcolor=BORDER, highlightbackground=BORDER,
+                     font=("Courier", 11)).pack(side="left")
+            tk.Label(row, text="Risk%", bg=BG, fg=MUTED,
+                     font=("Courier", 10)).pack(side="left", padx=(8, 2))
+            rp_var = tk.StringVar(value=str(acc["risk_pct"]))
+            tk.Entry(row, textvariable=rp_var, width=5, bg=BG2, fg=TEXT,
+                     insertbackground=TEXT, bd=0, highlightthickness=1,
+                     highlightcolor=BORDER, highlightbackground=BORDER,
+                     font=("Courier", 11)).pack(side="left")
+            tk.Label(row, text="MaxNot%", bg=BG, fg=MUTED,
+                     font=("Courier", 10)).pack(side="left", padx=(8, 2))
+            mn_var = tk.StringVar(value=str(acc["max_notional_pct"]))
+            tk.Entry(row, textvariable=mn_var, width=5, bg=BG2, fg=TEXT,
+                     insertbackground=TEXT, bd=0, highlightthickness=1,
+                     highlightcolor=BORDER, highlightbackground=BORDER,
+                     font=("Courier", 11)).pack(side="left")
+            self.acc_equity_vars.append(eq_var)
+            self.acc_risk_vars.append(rp_var)
+            self.acc_notional_vars.append(mn_var)
+
+        btn_row = tk.Frame(self._acc_frame, bg=BG)
+        btn_row.pack(fill="x", pady=(6, 2))
+        tk.Button(btn_row, text="Save Accounts", command=self._save_accounts,
+                  bg=BG2, fg=CYAN, bd=0, cursor="hand2",
+                  activebackground=BG3, activeforeground=CYAN,
+                  font=("Courier", 10), padx=8, pady=4).pack(side="right")
+        self._acc_status_lbl = tk.Label(btn_row, textvariable=self.acc_status_var,
+                                        bg=BG, fg=GREEN, font=("Courier", 10))
+        self._acc_status_lbl.pack(side="right", padx=8)
 
         # ── divider ──────────────────────────────────────────────────────────
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=16, pady=8)
@@ -274,6 +336,69 @@ class STFSApp(tk.Tk):
 
         # Default-select AUTO so users can hit Run immediately (status_var must exist first).
         self._select_regime("AUTO")
+
+    # ── account settings ────────────────────────────────────────────────────
+    def _toggle_accounts(self):
+        if self._acc_expanded:
+            self._acc_frame.pack_forget()
+            self._acc_toggle_lbl.config(text="\u25b6 ACCOUNT SETTINGS")
+        else:
+            self._acc_frame.pack(fill="x", padx=16, pady=(0, 4))
+            self._acc_toggle_lbl.config(text="\u25bc ACCOUNT SETTINGS")
+        self._acc_expanded = not self._acc_expanded
+
+    def _save_accounts(self):
+        cfg_path = SCRIPT_DIR / "config.py"
+        values = []
+        for i, acc in enumerate(C.ACCOUNTS):
+            name = acc["name"]
+            try:
+                eq = float(self.acc_equity_vars[i].get())
+                rp = float(self.acc_risk_vars[i].get())
+                mn = float(self.acc_notional_vars[i].get())
+            except ValueError:
+                self.acc_status_var.set(f"{name}: invalid number")
+                self._acc_status_lbl.config(fg=RED)
+                return
+            if eq <= 0:
+                self.acc_status_var.set(f"{name}: equity must be > 0")
+                self._acc_status_lbl.config(fg=RED)
+                return
+            if not (0 < rp <= 10):
+                self.acc_status_var.set(f"{name}: risk% must be 0–10")
+                self._acc_status_lbl.config(fg=RED)
+                return
+            if not (0 < mn <= 50):
+                self.acc_status_var.set(f"{name}: max notional% must be 0–50")
+                self._acc_status_lbl.config(fg=RED)
+                return
+            values.append((name, eq, rp, mn))
+
+        rows = ",\n".join(
+            f'    {{"name": "{name}", "equity": {eq:.0f}, "risk_pct": {rp}, "max_notional_pct": {mn}}}'
+            for name, eq, rp, mn in values
+        )
+        new_block = f"ACCOUNTS = [\n{rows},\n]"
+
+        text = cfg_path.read_text()
+        new_text = re.sub(
+            r"^ACCOUNTS\s*=\s*\[.*?^\]",
+            new_block,
+            text,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if new_text == text:
+            self.acc_status_var.set("No change detected")
+            self._acc_status_lbl.config(fg=MUTED)
+            return
+
+        tmp = cfg_path.with_suffix(".py.tmp")
+        tmp.write_text(new_text)
+        tmp.replace(cfg_path)
+
+        self.acc_status_var.set("Saved \u2713")
+        self._acc_status_lbl.config(fg=GREEN)
+        self.after(3000, lambda: self.acc_status_var.set(""))
 
     # ── order server ────────────────────────────────────────────────────────
     def _start_order_server(self):

@@ -182,39 +182,49 @@ def fetch_profile(ticker):
         return {}
 
 def fetch_daily_ohlc(tickers, lookback_days=1500):
-    if not tickers: return {}
+    """Returns (ohlc_dict, sources_dict) where sources maps ticker → 'TWS' | 'yf'."""
+    if not tickers:
+        return {}, {}
 
     # TWS path: try first, patch any missing tickers from yfinance below
-    tws_data = {}
+    tws_result = {}
     if _tws_connected():
-        tws_data = _tws_ohlc(tickers, lookback_days) or {}
-        if tws_data:
-            print(f"  ✓ OHLC via TWS ({len(tws_data)}/{len(tickers)} tickers)")
+        tws_result = _tws_ohlc(tickers, lookback_days) or {}
+        if tws_result:
+            print(f"  ✓ OHLC via TWS ({len(tws_result)}/{len(tickers)} tickers)")
 
-    missing = [t for t in tickers if t not in tws_data]
+    sources = {t: "TWS" for t in tws_result}
+    missing = [t for t in tickers if t not in tws_result]
     if not missing:
-        return tws_data
+        return tws_result, sources
 
     # yfinance fallback for missing tickers (or all, when TWS is off)
-    start = (date.today()-timedelta(days=lookback_days)).isoformat()
+    start = (date.today() - timedelta(days=lookback_days)).isoformat()
     try:
         data = yf.download(tickers=missing, start=start, interval="1d",
                            group_by="ticker", auto_adjust=True,
                            progress=False, threads=True)
     except Exception as e:
         print(f"  ⚠  yfinance: {e}")
-        return tws_data
-    out = dict(tws_data)
+        return tws_result, sources
+
+    out = dict(tws_result)
     if len(missing) == 1:
         df = data.dropna()
-        if not df.empty: out[missing[0]] = df
+        if not df.empty:
+            out[missing[0]] = df
+            sources[missing[0]] = "yf"
     else:
         for t in missing:
             try:
                 df = data[t].dropna()
-                if not df.empty: out[t] = df
-            except Exception: pass
-    return out
+                if not df.empty:
+                    out[t] = df
+                    sources[t] = "yf"
+            except Exception:
+                pass
+
+    return out, sources
 
 
 # ============================================================================
@@ -1340,6 +1350,32 @@ def render_options_block(opt, underlying_target=None):
   </table>
 </div>"""
 
+def _raw_indicators_html(r: dict) -> str:
+    """Collapsed indicator values panel for TradingView cross-check."""
+    ri = r.get("raw_indicators")
+    if not ri:
+        return ""
+    def _fmt(v, decimals=2):
+        return f"{v:.{decimals}f}" if v is not None else "—"
+    obv_pct = None
+    if ri.get("obv") is not None and ri.get("obv_ema") is not None and ri["obv_ema"] != 0:
+        obv_pct = (ri["obv"] - ri["obv_ema"]) / abs(ri["obv_ema"]) * 100
+    obv_str = f"{obv_pct:+.1f}%" if obv_pct is not None else "—"
+    return (
+        f'<details style="margin:4px 0;font-size:11px;color:var(--muted)">'
+        f'<summary style="cursor:pointer;list-style:none;color:var(--muted)">▶ Raw Indicators</summary>'
+        f'<div style="padding:6px 0;display:grid;grid-template-columns:1fr 1fr;gap:2px 16px;'
+        f'font-family:var(--font-body);font-size:11px">'
+        f'<span>EMA 8/21/34: {_fmt(ri["ema_fast"])} / {_fmt(ri["ema_mid"])} / {_fmt(ri["ema_slow"])}</span>'
+        f'<span>RSI(14): {_fmt(r.get("rsi"),1)}</span>'
+        f'<span>wEMA 10/30: {_fmt(ri["wema_fast"])} / {_fmt(ri["wema_slow"])}</span>'
+        f'<span>ADX(14): {_fmt(r.get("adx"),1)}</span>'
+        f'<span>OBV vs EMA: {obv_str}</span>'
+        f'<span>ATR%: {_fmt(r.get("atr_pct"),2)}%  RS: {_fmt(r.get("rs_pct"),2)}%</span>'
+        f'</div></details>'
+    )
+
+
 def render_card(r, detailed):
     ticker, score = r["ticker"], r["score"]
     trio   = "PASS" if r["trio_pass"] else "FAIL"
@@ -1352,21 +1388,27 @@ def render_card(r, detailed):
         f'<span class="fmark">{"✓" if ok else "✗"}</span></div>'
         for k,ok in r["factors"].items())
 
-    bt = r.get("backtest", {"trades": 0, "win_rate": 0.0, "compounded": 0.0, "expectancy_R": 0.0})
-    if bt["trades"] > 0:
-        bt_col = "var(--green)" if bt["win_rate"] >= 60 else ("var(--amber)" if bt["win_rate"] >= 40 else "var(--red)")
-        exp_R = bt.get("expectancy_R", 0.0)
-        thin_tag = " <span style='color:var(--amber)'>(thin)</span>" if r.get("thin_history") else ""
-        train = bt.get("train", {})
-        train_tag = ""
-        if train.get("trades", 0) > 0:
-            # Show train side-by-side so user can spot train→test degradation
-            train_tag = (f" <span style='color:var(--muted);font-size:11px'>"
-                         f"(train {train['win_rate']:.0f}%/{train.get('expectancy_R',0):+.2f}R "
-                         f"n={train['trades']})</span>")
-        bt_html = (f"  ·  <span style='color:{bt_col};font-weight:700'>BT-test: "
-                   f"{bt['win_rate']:.1f}% Win · {exp_R:+.2f}R · {bt['trades']} trades · "
-                   f"{bt['compounded']:.0f}% Ret</span>{thin_tag}{train_tag}")
+    bt = r.get("backtest", {})
+    thin_tag = " <span style='color:var(--amber)'>(thin)</span>" if r.get("thin_history") else ""
+    nf = bt.get("n_folds_with_data", 0)
+    if nf > 0:
+        mwr  = bt["mean_wr"]
+        swr  = bt.get("std_wr", 0.0)
+        mexp = bt["mean_expR"]
+        sexp = bt.get("std_expR", 0.0)
+        con  = bt.get("consistent_folds", 0)
+        bt_col = "var(--green)" if mwr >= 60 else ("var(--amber)" if mwr >= 40 else "var(--red)")
+        swr_s  = f"±{swr:.0f}"  if swr  >= 0.5  else ""
+        sexp_s = f"±{sexp:.2f}" if sexp >= 0.01 else ""
+        bt_html = (f"  ·  <span style='color:{bt_col};font-weight:700'>"
+                   f"BT: {mwr:.0f}{swr_s}% WR · {mexp:+.2f}{sexp_s}R · "
+                   f"{con}/{nf} folds</span>{thin_tag}")
+        rec = bt.get("recent", {})
+        if rec.get("trades", 0) > 0:
+            rc = "var(--green)" if rec["win_rate"] >= 60 else ("var(--amber)" if rec["win_rate"] >= 40 else "var(--red)")
+            bt_html += (f"  ·  <span style='color:{rc};font-size:11px'>"
+                        f"1yr: {rec['win_rate']:.0f}% WR · {rec.get('expectancy_R',0):+.2f}R"
+                        f" n={rec['trades']}</span>")
     else:
         bt_html = "  ·  <span style='color:var(--muted)'>BT: N/A</span>"
 
@@ -1395,20 +1437,28 @@ def render_card(r, detailed):
         except Exception:
             pass
 
+    # Data source badge — green for TWS (live/verified), amber for yfinance
+    src = r.get("data_source", "yf")
+    src_col  = "var(--green)" if src == "TWS" else "var(--amber)"
+    src_html = (f"  ·  <span style='background:{src_col};color:#080c12;"
+                f"padding:1px 5px;border-radius:3px;font-size:10px;"
+                f"font-weight:700'>{src}</span>")
+
     header = f"""
 <div class="card {cc}">
   <div class="card-hdr">
     <div>
       <span class="ticker">{ticker}</span>
       <span class="tmeta">  {r.get('industry','')}  ·  ${r['close']:.2f}
-        · ATR {r['atr']:.2f} ({r['atr_pct']:.1f}%)  · RSI {r['rsi']:.0f}  · ADX {r['adx']:.0f}{bt_html}{q_html}{mb_html}{earn_html}</span>
+        · ATR {r['atr']:.2f} ({r['atr_pct']:.1f}%)  · RSI {r['rsi']:.0f}  · ADX {r['adx']:.0f}{bt_html}{q_html}{mb_html}{earn_html}{src_html}</span>
     </div>
     <div>
       <span class="spill {sc}">Score {score}/8</span>
       <span style="color:{tc};margin-left:8px;font-size:11px;font-weight:700">TRIO {trio}</span>
     </div>
   </div>
-  <div class="fgrid">{fgrid}</div>"""
+  <div class="fgrid">{fgrid}</div>
+  {_raw_indicators_html(r)}"""
 
     trade = ""
     btn   = ""
@@ -1447,9 +1497,13 @@ def _order_json(r: dict) -> str:
         "momentum_bonus": r.get("momentum_bonus"),
         "earnings_date":  r.get("earnings_date"),
         "factors":        r.get("factors"),
-        "bt_test_winrate":  bt.get("win_rate"),
-        "bt_test_expR":     bt.get("expectancy_R"),
-        "bt_test_trades":   bt.get("trades"),
+        "bt_mean_winrate":      bt.get("mean_wr"),
+        "bt_mean_expR":         bt.get("mean_expR"),
+        "bt_total_trades":      bt.get("trades"),
+        "bt_consistent_folds":  bt.get("consistent_folds"),
+        "bt_n_folds":           bt.get("n_folds_with_data"),
+        "bt_recent_winrate":    bt.get("recent", {}).get("win_rate"),
+        "bt_recent_expR":       bt.get("recent", {}).get("expectancy_R"),
         "ivp":              (opt or {}).get("ivp"),
         "iv_hv":            (opt or {}).get("iv_hv"),
         "atm_iv":           (opt or {}).get("atm_iv"),
@@ -1902,7 +1956,7 @@ def main():
 
     print(f"  ▸ OHLC download ({len(watchlist)} tickers + benchmark)...")
     all_tickers = list(set(watchlist + [C.BENCHMARK]))
-    ohlc = fetch_daily_ohlc(all_tickers)
+    ohlc, data_sources = fetch_daily_ohlc(all_tickers)
     print(f"    Got {len(ohlc)}/{len(all_tickers)} tickers")
 
     bench_df = ohlc.get(C.BENCHMARK)
@@ -1945,6 +1999,7 @@ def main():
         info["industry"] = profiles.get(t,{}).get("industry","")
         info["earnings_date"] = earnings_map.get(t)  # ISO date or None
         info["regime"] = regime  # journal context for trade outcome analysis
+        info["data_source"] = data_sources.get(t, "yf")
         results.append(info)
 
     _attach_quality(results)
