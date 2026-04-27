@@ -329,6 +329,8 @@ def get_ohlc(tickers: list, lookback_days: int = 300) -> "dict | None":
     except ImportError:
         return None
 
+    # TWS cap for 1-day bars is 365 calendar days; clamp before requesting.
+    tws_days = min(lookback_days, 365)
     out = {}
     for ticker in tickers:
         try:
@@ -337,7 +339,7 @@ def get_ohlc(tickers: list, lookback_days: int = 300) -> "dict | None":
             bars = _ib.reqHistoricalData(
                 contract,
                 endDateTime="",
-                durationStr=f"{lookback_days} D",
+                durationStr=f"{tws_days} D",
                 barSizeSetting="1 day",
                 whatToShow="TRADES",
                 useRTH=True,
@@ -355,8 +357,8 @@ def get_ohlc(tickers: list, lookback_days: int = 300) -> "dict | None":
             })[["Open", "High", "Low", "Close", "Volume"]].dropna()
             if not df.empty:
                 out[ticker] = df
-        except Exception:
-            pass   # fall through; battle_card fills gap from yfinance
+        except Exception as e:
+            print(f"  ⚠  TWS OHLC {ticker}: {type(e).__name__}: {e}")
 
     return out if out else None
 
