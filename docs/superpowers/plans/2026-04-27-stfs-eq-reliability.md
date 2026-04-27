@@ -27,7 +27,7 @@
 **Files:**
 - Modify: `config.py:227-231`
 
-- [ ] **Step 1: Edit config.py**
+- [x] **Step 1: Edit config.py**
 
 Replace the existing backtest block:
 
@@ -52,7 +52,7 @@ SLIPPAGE_PCT            = 0.05    # ±0.05% per leg (entry + exit)
 COMMISSION_PER_TRADE    = 0.001   # fraction of notional per leg (0.001 = 0.1%); 0.2% round-trip
 ```
 
-- [ ] **Step 2: Verify Python loads cleanly**
+- [x] **Step 2: Verify Python loads cleanly**
 
 ```bash
 cd /Users/bhaviksarvaiya/stfs-eq && python -c "import config as C; print(C.BACKTEST_FOLDS, C.BACKTEST_RECENT_BARS, C.COMMISSION_PER_TRADE)"
@@ -60,7 +60,7 @@ cd /Users/bhaviksarvaiya/stfs-eq && python -c "import config as C; print(C.BACKT
 
 Expected output: `5 252 0.001`
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add config.py
@@ -75,7 +75,7 @@ git commit -m "config: add BACKTEST_FOLDS, BACKTEST_RECENT_BARS; fix COMMISSION_
 - Create: `test_backtest.py`
 - Modify: `battle_card.py` — `_simulate._close` inner function (~line 563)
 
-- [ ] **Step 1: Create test file with commission test**
+- [x] **Step 1: Create test file with commission test**
 
 ```python
 # test_backtest.py
@@ -141,7 +141,7 @@ def test_commission_is_fraction_of_notional():
     )
 ```
 
-- [ ] **Step 2: Run test — verify it FAILS**
+- [x] **Step 2: Run test — verify it FAILS**
 
 ```bash
 cd /Users/bhaviksarvaiya/stfs-eq && python -m pytest test_backtest.py::test_commission_is_fraction_of_notional -v
@@ -149,7 +149,7 @@ cd /Users/bhaviksarvaiya/stfs-eq && python -m pytest test_backtest.py::test_comm
 
 Expected: `FAILED` — the old formula produces a different commission value.
 
-- [ ] **Step 3: Fix `_close` in `_simulate`**
+- [x] **Step 3: Fix `_close` in `_simulate`**
 
 In `battle_card.py`, find the `_close` inner function inside `_simulate` (~line 562):
 
@@ -191,7 +191,7 @@ Also update the docstring in `_simulate` to reflect the new model:
     """
 ```
 
-- [ ] **Step 4: Run test — verify PASS**
+- [x] **Step 4: Run test — verify PASS**
 
 ```bash
 python -m pytest test_backtest.py::test_commission_is_fraction_of_notional -v
@@ -199,7 +199,7 @@ python -m pytest test_backtest.py::test_commission_is_fraction_of_notional -v
 
 Expected: `PASSED`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add test_backtest.py battle_card.py
@@ -214,7 +214,7 @@ git commit -m "fix: commission in _simulate is now fraction of notional, not dol
 - Modify: `test_backtest.py` — add gap tests
 - Modify: `battle_card.py` — `_simulate` in-trade block (~line 575)
 
-- [ ] **Step 1: Add gap tests to `test_backtest.py`**
+- [x] **Step 1: Add gap tests to `test_backtest.py`**
 
 Append to `test_backtest.py`:
 
@@ -301,7 +301,7 @@ def _arrays(n, price, atr_val, sb_indices, lo_override=None, hi_override=None,
     return sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a
 ```
 
-- [ ] **Step 2: Run gap tests — verify FAIL**
+- [x] **Step 2: Run gap tests — verify FAIL**
 
 ```bash
 python -m pytest test_backtest.py::test_gap_down_stop_fills_at_open test_backtest.py::test_gap_up_target_fills_at_open -v
@@ -309,7 +309,7 @@ python -m pytest test_backtest.py::test_gap_down_stop_fills_at_open test_backtes
 
 Expected: both `FAILED`
 
-- [ ] **Step 3: Fix in-trade block in `_simulate`**
+- [x] **Step 3: Fix in-trade block in `_simulate`**
 
 Find the in-trade loop body in `_simulate` (~line 575):
 
@@ -340,7 +340,7 @@ Replace with:
             continue
 ```
 
-- [ ] **Step 4: Run all tests — verify PASS**
+- [x] **Step 4: Run all tests — verify PASS**
 
 ```bash
 python -m pytest test_backtest.py -v
@@ -348,7 +348,7 @@ python -m pytest test_backtest.py -v
 
 Expected: all 3 tests `PASSED`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add test_backtest.py battle_card.py
@@ -363,7 +363,7 @@ git commit -m "fix: gap-aware stop/target fills in _simulate; fill at open when 
 - Modify: `test_backtest.py` — add WFO structure test
 - Modify: `battle_card.py` — replace `run_mini_backtest` body
 
-- [ ] **Step 1: Add WFO structure test to `test_backtest.py`**
+- [x] **Step 1: Add WFO structure test to `test_backtest.py`**
 
 Append:
 
@@ -418,7 +418,7 @@ def test_run_mini_backtest_returns_fold_structure():
     assert "win_rate" in result["recent"]
 ```
 
-- [ ] **Step 2: Run WFO test — verify FAIL**
+- [x] **Step 2: Run WFO test — verify FAIL**
 
 ```bash
 python -m pytest test_backtest.py::test_run_mini_backtest_returns_fold_structure -v
@@ -426,7 +426,7 @@ python -m pytest test_backtest.py::test_run_mini_backtest_returns_fold_structure
 
 Expected: `FAILED` — `folds` key not in result
 
-- [ ] **Step 3: Replace `run_mini_backtest` body in `battle_card.py`**
+- [x] **Step 3: Replace `run_mini_backtest` body in `battle_card.py`**
 
 Find the entire `run_mini_backtest` function and replace its body (keep the function signature and the docstring replacement below):
 
@@ -527,7 +527,7 @@ def run_mini_backtest(df, bench_df, factors=None):
     }
 ```
 
-- [ ] **Step 4: Run all tests — verify PASS**
+- [x] **Step 4: Run all tests — verify PASS**
 
 ```bash
 python -m pytest test_backtest.py -v
@@ -535,7 +535,7 @@ python -m pytest test_backtest.py -v
 
 Expected: all 4 tests `PASSED`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add test_backtest.py battle_card.py
@@ -549,7 +549,7 @@ git commit -m "feat: rolling 5-fold walk-forward + recent-era stats in run_mini_
 **Files:**
 - Modify: `battle_card.py` — `_attach_quality` function (~line 1744)
 
-- [ ] **Step 1: Update thin-history check to use fold stats**
+- [x] **Step 1: Update thin-history check to use fold stats**
 
 Find in `_attach_quality`:
 
@@ -565,7 +565,7 @@ Replace with:
                 any(s["trades"] < C.THIN_HISTORY_TRADES for s in folds))
 ```
 
-- [ ] **Step 2: Smoke-test pipeline runs without error**
+- [x] **Step 2: Smoke-test pipeline runs without error**
 
 ```bash
 cd /Users/bhaviksarvaiya/stfs-eq && python -c "
@@ -588,7 +588,7 @@ print('folds:', len(r['backtest']['folds']), 'recent trades:', r['backtest']['re
 
 Expected: prints quality score, thin flag, fold count = 5, recent trade count.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add battle_card.py
@@ -602,7 +602,7 @@ git commit -m "fix: _attach_quality thin-history checks all folds, not just tota
 **Files:**
 - Modify: `indicators.py` — `compute_factors` (body and return dict)
 
-- [ ] **Step 1: Capture wema series and add to return dict**
+- [x] **Step 1: Capture wema series and add to return dict**
 
 In `indicators.py`, find the F2 block:
 
@@ -640,7 +640,7 @@ Replace with:
         f2 = pd.Series(False, index=df.index)
 ```
 
-- [ ] **Step 2: Add new keys to return dict**
+- [x] **Step 2: Add new keys to return dict**
 
 Find the `return {` at the bottom of `compute_factors`:
 
@@ -676,7 +676,7 @@ Replace with:
     }
 ```
 
-- [ ] **Step 3: Verify `compute_factors` still works**
+- [x] **Step 3: Verify `compute_factors` still works**
 
 ```bash
 python -c "
@@ -694,7 +694,7 @@ print('obv_ema last:', round(float(fac['obv_ema'].iloc[-1]),0))
 
 Expected: three numeric values printed, no errors.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add indicators.py
@@ -708,7 +708,7 @@ git commit -m "feat: compute_factors exposes ema/wema/obv series for indicator v
 **Files:**
 - Modify: `battle_card.py` — `score_ticker` return dict (~line 711)
 
-- [ ] **Step 1: Extract raw values and add to return**
+- [x] **Step 1: Extract raw values and add to return**
 
 In `score_ticker`, find the final `return {` statement. Before it, add:
 
@@ -744,7 +744,7 @@ The full return block becomes:
             "raw_indicators": raw_indicators}
 ```
 
-- [ ] **Step 2: Smoke-test**
+- [x] **Step 2: Smoke-test**
 
 ```bash
 python -c "
@@ -764,7 +764,7 @@ print('wEMA 10/30:', ri['wema_fast'] and round(ri['wema_fast'],2), '/', ri['wema
 
 Expected: three EMA values and two weekly EMA values printed.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add battle_card.py
@@ -778,7 +778,7 @@ git commit -m "feat: score_ticker returns raw_indicators dict for TradingView cr
 **Files:**
 - Modify: `battle_card.py` — `fetch_daily_ohlc`, `main()`
 
-- [ ] **Step 1: Modify `fetch_daily_ohlc` to return `(ohlc, sources)`**
+- [x] **Step 1: Modify `fetch_daily_ohlc` to return `(ohlc, sources)`**
 
 Find `def fetch_daily_ohlc(tickers, lookback_days=1500):` and replace the full function:
 
@@ -827,7 +827,7 @@ def fetch_daily_ohlc(tickers, lookback_days=1500):
     return out, sources
 ```
 
-- [ ] **Step 2: Update `main()` to unpack the tuple**
+- [x] **Step 2: Update `main()` to unpack the tuple**
 
 In `main()`, find:
 
@@ -868,7 +868,7 @@ Replace with:
         results.append(info)
 ```
 
-- [ ] **Step 3: Smoke-test import**
+- [x] **Step 3: Smoke-test import**
 
 ```bash
 python -c "from battle_card import fetch_daily_ohlc; ohlc, src = fetch_daily_ohlc(['SPY'], lookback_days=30); print('source:', src)"
@@ -876,7 +876,7 @@ python -c "from battle_card import fetch_daily_ohlc; ohlc, src = fetch_daily_ohl
 
 Expected: `source: {'SPY': 'yf'}` (or `TWS` if connected)
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add battle_card.py
@@ -890,7 +890,7 @@ git commit -m "feat: fetch_daily_ohlc returns (ohlc, sources) dict; source threa
 **Files:**
 - Modify: `battle_card.py` — `render_card` function (~line 1268)
 
-- [ ] **Step 1: Add source badge to card header**
+- [x] **Step 1: Add source badge to card header**
 
 In `render_card`, find where `earn_html` is built (the last HTML variable before `header = ...`). After it, add:
 
@@ -909,7 +909,7 @@ Then insert `{src_html}` into the `header` f-string right after `{earn_html}`:
         · ATR {r['atr']:.2f} ({r['atr_pct']:.1f}%)  · RSI {r['rsi']:.0f}  · ADX {r['adx']:.0f}{bt_html}{q_html}{mb_html}{earn_html}{src_html}</span>
 ```
 
-- [ ] **Step 2: Replace BT HTML block with new rolling-WFO display**
+- [x] **Step 2: Replace BT HTML block with new rolling-WFO display**
 
 Find the BT HTML block in `render_card`:
 
@@ -961,7 +961,7 @@ Replace with:
         bt_html = "  ·  <span style='color:var(--muted)'>BT: N/A</span>"
 ```
 
-- [ ] **Step 3: Add indicator values panel after `fgrid`**
+- [x] **Step 3: Add indicator values panel after `fgrid`**
 
 In `render_card`, find the `header` variable that contains `</div>` at its end followed by `<div class="fgrid">{fgrid}</div>`. After `<div class="fgrid">{fgrid}</div>`, add a raw indicator section.
 
@@ -1008,7 +1008,7 @@ def _raw_indicators_html(r: dict) -> str:
     )
 ```
 
-- [ ] **Step 4: Also update `_order_json` signal block to use new BT keys**
+- [x] **Step 4: Also update `_order_json` signal block to use new BT keys**
 
 Find in `_order_json`:
 
@@ -1030,7 +1030,7 @@ Replace with:
         "bt_recent_expR":    bt.get("recent", {}).get("expectancy_R"),
 ```
 
-- [ ] **Step 5: Run battle card on a small watchlist to verify HTML renders**
+- [x] **Step 5: Run battle card on a small watchlist to verify HTML renders**
 
 ```bash
 cd /Users/bhaviksarvaiya/stfs-eq && python battle_card.py NEUTRAL --no-open 2>&1 | tail -20
@@ -1038,14 +1038,14 @@ cd /Users/bhaviksarvaiya/stfs-eq && python battle_card.py NEUTRAL --no-open 2>&1
 
 Expected: completes without exception; output file created in `output/`.
 
-- [ ] **Step 6: Open output HTML and visually verify**
+- [x] **Step 6: Open output HTML and visually verify**
 
 - Source badge (green TWS or amber yf) appears in card header
 - BT line shows `BT: XX±Xpp% WR · +X.XXR · X/5 folds`  
 - 1yr line appears if recent window has trades
 - `▶ Raw Indicators` section is present and expands on click
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add battle_card.py
@@ -1059,7 +1059,7 @@ git commit -m "feat: HTML source badge, indicator verification panel, rolling-WF
 **Files:**
 - Modify: `launcher.py` — `_build_ui`, `__init__`, add `_save_accounts` method
 
-- [ ] **Step 1: Add imports to `launcher.py`**
+- [x] **Step 1: Add imports to `launcher.py`**
 
 Add `import re` to the imports block (near the top with other stdlib imports):
 
@@ -1077,7 +1077,7 @@ grep "^import config\|^from config\|import config" /Users/bhaviksarvaiya/stfs-eq
 
 If absent, add `import config as C` after the existing imports.
 
-- [ ] **Step 2: Add account vars to `__init__`**
+- [x] **Step 2: Add account vars to `__init__`**
 
 In `STFSApp.__init__`, after existing `self.xxx_var` declarations, add:
 
@@ -1089,7 +1089,7 @@ In `STFSApp.__init__`, after existing `self.xxx_var` declarations, add:
         self.acc_status_var    = tk.StringVar(value="")
 ```
 
-- [ ] **Step 3: Add collapsible account section to `_build_ui`**
+- [x] **Step 3: Add collapsible account section to `_build_ui`**
 
 In `_build_ui`, find the divider immediately before the regime selector:
 
@@ -1157,7 +1157,7 @@ Insert the account settings section **before** that divider:
         self._acc_status_lbl.pack(side="right", padx=8)
 ```
 
-- [ ] **Step 4: Add `_toggle_accounts` and `_save_accounts` methods to `STFSApp`**
+- [x] **Step 4: Add `_toggle_accounts` and `_save_accounts` methods to `STFSApp`**
 
 Add these two methods to the `STFSApp` class (anywhere after `_build_ui`):
 
@@ -1242,7 +1242,7 @@ Note: `_toggle_accounts` packs `_acc_frame` after the header row. Because tkinte
         self._acc_expanded = not self._acc_expanded
 ```
 
-- [ ] **Step 5: Launch the GUI and test**
+- [x] **Step 5: Launch the GUI and test**
 
 ```bash
 cd /Users/bhaviksarvaiya/stfs-eq && python launcher.py
@@ -1256,7 +1256,7 @@ Manual checks:
 5. Open `config.py` — verify Borg equity is now `25000`
 6. Change it back to 20000 in the GUI and Save
 
-- [ ] **Step 6: Run all tests to confirm no regressions**
+- [x] **Step 6: Run all tests to confirm no regressions**
 
 ```bash
 python -m pytest test_backtest.py -v
@@ -1264,7 +1264,7 @@ python -m pytest test_backtest.py -v
 
 Expected: all 4 tests pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add launcher.py test_backtest.py
