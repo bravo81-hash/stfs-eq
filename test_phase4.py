@@ -110,14 +110,16 @@ def test_trailing_stop_raises_stop_before_pullback(monkeypatch):
     """
     Trailing stop raises stop_loss before a pullback, improving exit vs static stop.
 
+    Sim model: signal at bar 0 → limit active → fill check at lo[i+1] when
+    limit_order_active at iteration i=1 (checks lo[2]).
+
     Setup (slip=0, commission=0 for exact arithmetic):
-      close[0]=100, ATR[0]=2 → p_limit=97 (ENTRY_MULT=1.5), p_stop_d=5 (STOP_MULT=2.5),
-      trail_trigger=1.0*5=5, initial stop=92, target=105
-      Entry fills bar 1: lo[1]=96 <= 97
-      Bar 2: hi[2]=103 >= 97+5=102 → trailing activates; trail_ma[2]=94 < 92? No → stop stays 92
-      Bar 3: hi[3]=103; trail_ma[3]=96 > 92 → stop moves to 96
-      Bar 4: lo[4]=94 <= 96 → stop hit at 96
-      P&L = (96 - 97) / 97 ≈ -1.03%   (static stop would give (92-97)/97 = -5.15%)
+      Bar 0: cl=100, ATR=2, sb=True → p_limit=97, p_stop_d=5, trail_trigger=5, p_tar_d=8
+      Bar 1: i=1, limit_order_active, lo[2]=94 <= 97 → FILL
+             entry=97, stop=92, target=105
+      Bar 2: i=2, in_trade; hi[3]=104 >= 97+5=102 → trail activates; trail_ma[3]=96 > 92 → stop=96
+      Bar 3: i=3, in_trade; lo[4]=93 <= 96 → stop hit at 96
+      P&L = (96 - 97) / 97 ≈ -1.03%  (original stop 92 would NOT have been hit; lo[4]=93 > 92)
     """
     import config as C
     monkeypatch.setattr(C, "SLIPPAGE_PCT", 0.0)
@@ -126,13 +128,15 @@ def test_trailing_stop_raises_stop_before_pullback(monkeypatch):
 
     from battle_card import _simulate
 
-    n = 10
-    cl  = np.array([100.0, 97.0, 103.0, 103.0,  97.0,  97.0,  97.0,  97.0,  97.0,  97.0])
-    hi  = np.array([101.0, 98.0, 104.0, 104.0,  98.0,  98.0,  98.0,  98.0,  98.0,  98.0])
-    lo  = np.array([ 96.0, 96.0, 102.5, 102.5,  94.0,  94.0,  94.0,  94.0,  94.0,  94.0])
-    op  = np.array([100.0, 97.0, 103.0, 103.0,  97.0,  97.0,  97.0,  97.0,  97.0,  97.0])
-    at  = np.array([  2.0,  2.0,   2.0,   2.0,   2.0,   2.0,   2.0,   2.0,   2.0,   2.0])
-    tm  = np.array([ 88.0, 90.0,  94.0,  96.0,  96.0,  96.0,  96.0,  96.0,  96.0,  96.0])
+    n = 8
+    #                bar0    bar1   bar2    bar3    bar4   bar5   bar6   bar7
+    cl  = np.array([100.0,  97.0,  94.0, 103.0,  91.0,  91.0,  91.0,  91.0])
+    hi  = np.array([101.0,  98.0,  97.0, 104.0,  98.0,  98.0,  98.0,  98.0])
+    lo  = np.array([ 96.0,  96.0,  94.0, 102.5,  93.0,  93.0,  93.0,  93.0])
+    op  = np.array([100.0,  97.0,  94.0, 103.0,  97.0,  97.0,  97.0,  97.0])
+    at  = np.array([  2.0,   2.0,   2.0,   2.0,   2.0,   2.0,   2.0,   2.0])
+    # trail_ma[3]=96 > current_stop=92 → raises stop to 96
+    tm  = np.array([ 88.0,  90.0,  93.0,  96.0,  96.0,  96.0,  96.0,  96.0])
 
     sb  = np.array([True] + [False] * (n - 1))
     brk = np.array([False] * n)
@@ -147,7 +151,10 @@ def test_trailing_stop_raises_stop_before_pullback(monkeypatch):
 
 
 def test_trailing_does_not_activate_before_1r(monkeypatch):
-    """If price never reaches entry + trail_trigger, stop stays at initial stop."""
+    """If price never reaches entry + trail_trigger, stop stays at initial stop.
+
+    Fill at lo[2]=94. hi[3]=101.9 < 102 (no activation). lo[4]=91 hits original stop=92.
+    """
     import config as C
     monkeypatch.setattr(C, "SLIPPAGE_PCT", 0.0)
     monkeypatch.setattr(C, "COMMISSION_PER_TRADE", 0.0)
@@ -155,13 +162,14 @@ def test_trailing_does_not_activate_before_1r(monkeypatch):
 
     from battle_card import _simulate
 
-    n = 10
-    cl  = np.array([100.0, 97.0, 101.0, 101.0,  91.0,  91.0,  91.0,  91.0,  91.0,  91.0])
-    hi  = np.array([101.0, 98.0, 101.9, 101.9,  92.5,  92.5,  92.5,  92.5,  92.5,  92.5])
-    lo  = np.array([ 96.0, 96.0, 100.5, 100.5,  91.5,  91.5,  91.5,  91.5,  91.5,  91.5])
-    op  = np.array([100.0, 97.0, 101.0, 101.0,  91.0,  91.0,  91.0,  91.0,  91.0,  91.0])
-    at  = np.array([  2.0,  2.0,   2.0,   2.0,   2.0,   2.0,   2.0,   2.0,   2.0,   2.0])
-    tm  = np.array([ 88.0, 90.0,  97.0,  98.0,  99.0,  99.0,  99.0,  99.0,  99.0,  99.0])
+    n = 8
+    #                bar0    bar1   bar2    bar3    bar4   bar5   bar6   bar7
+    cl  = np.array([100.0,  97.0,  94.0, 101.5,  91.0,  91.0,  91.0,  91.0])
+    hi  = np.array([101.0,  98.0,  97.0, 101.9,  92.5,  92.5,  92.5,  92.5])
+    lo  = np.array([ 96.0,  96.0,  94.0, 101.0,  91.0,  91.0,  91.0,  91.0])
+    op  = np.array([100.0,  97.0,  94.0, 101.5,  97.0,  97.0,  97.0,  97.0])
+    at  = np.array([  2.0,   2.0,   2.0,   2.0,   2.0,   2.0,   2.0,   2.0])
+    tm  = np.array([ 88.0,  90.0,  93.0,  96.0,  97.0,  97.0,  97.0,  97.0])
 
     sb  = np.array([True] + [False] * (n - 1))
     brk = np.array([False] * n)
@@ -171,6 +179,7 @@ def test_trailing_does_not_activate_before_1r(monkeypatch):
     trades = _simulate(df, sb, brk, cl, at, op, hi, lo, tm, 0, n)
 
     assert len(trades) == 1
+    # Stop stayed at 92 → exit at 92, P&L = (92-97)/97 ≈ -5.15%
     expected = (92.0 - 97.0) / 97.0
     assert abs(trades[0] - expected) < 0.001, f"Expected ~{expected:.4f}, got {trades[0]:.4f}"
 

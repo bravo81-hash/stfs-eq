@@ -547,7 +547,7 @@ def fetch_options_data(ticker, df):
 # SCORING
 # ============================================================================
 
-def _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, start_i, end_i):
+def _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, trail_ma_a, start_i, end_i):
     """Replay strong_buy signals from start_i..end_i (exclusive). Returns list of
     net fractional P/L per trade after friction.
 
@@ -555,6 +555,9 @@ def _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, start_i, end_i):
       entry  = limit * (1 + slip)        # pay up on entry
       exit   = level * (1 ± slip)        # cross spread on close
       comm   = 2 * COMMISSION_PER_TRADE  # fraction of notional, round-trip
+
+    Trailing stop: activates when price reaches entry + TRAIL_ACTIVATE_R × stop_dist,
+    then ratchets stop_loss up to trail_ma_a[i+1]. Stop never moves down.
     """
     slip = C.SLIPPAGE_PCT / 100.0
 
@@ -562,20 +565,32 @@ def _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, start_i, end_i):
     limit_order_active = False
     entry_price = stop_loss = take_profit = p_limit = p_stop_d = p_tar_d = 0.0
     pending_brk = False
+    trailing_active = False
+    trail_trigger = 0.0
     trades = []
 
     def _close(exit_px):
-        nonlocal in_trade
+        nonlocal in_trade, trailing_active
         exit_eff = exit_px * (1 - slip) if exit_px >= entry_price else exit_px * (1 + slip)
         gross = (exit_eff - entry_price) / entry_price
         trades.append(gross - 2 * C.COMMISSION_PER_TRADE)
         in_trade = False
+        trailing_active = False
 
     for i in range(start_i, min(end_i, len(df) - 1)):
         if in_trade:
             nxt_op = op_a[i + 1]
             nxt_lo = lo_a[i + 1]
             nxt_hi = hi_a[i + 1]
+
+            # Trailing stop: activate at configured R profit, then ratchet up only
+            if not trailing_active and nxt_hi >= entry_price + trail_trigger:
+                trailing_active = True
+            if trailing_active:
+                new_stop = trail_ma_a[i + 1]
+                if new_stop > stop_loss:
+                    stop_loss = new_stop
+
             if nxt_op <= stop_loss:
                 _close(nxt_op)                  # gap-down past stop: fill at open
             elif nxt_op >= take_profit:
@@ -592,6 +607,7 @@ def _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, start_i, end_i):
                 entry_price = op_a[i + 1] * (1 + slip)
                 stop_loss = entry_price - p_stop_d
                 take_profit = entry_price + p_tar_d
+                trail_trigger = C.TRAIL_ACTIVATE_R * p_stop_d
                 limit_order_active = False
                 in_trade = True
                 if lo_a[i + 1] <= stop_loss:   _close(stop_loss)
@@ -601,6 +617,7 @@ def _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, start_i, end_i):
                     entry_price = p_limit * (1 + slip)
                     stop_loss = entry_price - p_stop_d
                     take_profit = entry_price + p_tar_d
+                    trail_trigger = C.TRAIL_ACTIVATE_R * p_stop_d
                     limit_order_active = False
                     in_trade = True
                     if lo_a[i + 1] <= stop_loss: _close(stop_loss)
@@ -667,6 +684,7 @@ def run_mini_backtest(df, bench_df, factors=None):
     sb_a  = factors["strong_buy"].values
     brk_a = is_breakout.values
     cl_a, at_a, op_a, hi_a, lo_a = cl.values, at.values, op.values, hi.values, lo.values
+    trail_ma_a = factors["trail_ma"].values
 
     n = len(df)
     n_folds = C.BACKTEST_FOLDS
@@ -683,13 +701,13 @@ def run_mini_backtest(df, bench_df, factors=None):
         test_end = (test_start + test_size) if k < n_folds - 1 else n
         if test_start >= n:
             break
-        trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, test_start, test_end)
+        trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, trail_ma_a, test_start, test_end)
         fold_stats.append(_stats(trades))
         all_fold_trades.extend(trades)
 
     # Recent-era window (independent of folds — may overlap)
     recent_start = max(0, n - C.BACKTEST_RECENT_BARS)
-    recent_trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, recent_start, n)
+    recent_trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, trail_ma_a, recent_start, n)
     recent_stats = _stats(recent_trades)
 
     folds_with_data = [s for s in fold_stats if s["trades"] > 0]
