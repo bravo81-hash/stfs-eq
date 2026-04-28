@@ -35,9 +35,11 @@ ET       = ZoneInfo("America/New_York")
 _JOURNAL = Path(C.JOURNAL_PATH)
 
 # Structures that use long-premium exit DTE threshold
-_DEBIT_STRUCTURES = {"long_call", "debit_spread"}
+_DEBIT_STRUCTURES    = {"long_call", "debit_spread"}
 # Structures that use credit DTE threshold
-_CREDIT_STRUCTURES = {"credit_spread", "diagonal"}
+_CREDIT_STRUCTURES   = {"credit_spread"}
+# Diagonal: debit upfront, but exits on back-leg DTE like credit (21-day threshold)
+_DIAGONAL_STRUCTURES = {"diagonal"}
 
 
 # ── pure exit signal helpers (testable without TWS) ───────────────────────────
@@ -77,6 +79,17 @@ def _signal_pnl(
             return True, f"{unrealized*100:.0f}% loss (stop)"
         return False, ""
 
+    if structure in _DIAGONAL_STRUCTURES and net_debit and net_debit > 0:
+        cost_basis  = net_debit * 100 * contracts
+        current_val = mark * 100 * contracts
+        unrealized  = (current_val - cost_basis) / cost_basis
+        gain_target = C.DIAGONAL_TARGET_MULT - 1.0  # 1.50 - 1.0 = 0.50 = 50%
+        if unrealized >= gain_target:
+            return True, f"+{gain_target*100:.0f}% gain (diagonal target)"
+        if unrealized <= -C.OPT_PNL_STOP_PCT:
+            return True, f"{unrealized*100:.0f}% loss (stop)"
+        return False, ""
+
     if structure in _CREDIT_STRUCTURES and net_credit and net_credit > 0:
         max_credit   = net_credit * 100 * contracts
         current_cost = mark * 100 * contracts      # cost to close
@@ -95,6 +108,8 @@ def _signal_dte(structure: str, dte: int) -> tuple[bool, str]:
     """Signal 3: DTE-based time exit."""
     if structure in _CREDIT_STRUCTURES and dte <= C.OPT_DTE_EXIT_CREDIT:
         return True, f"DTE {dte} ≤ {C.OPT_DTE_EXIT_CREDIT} (credit/time)"
+    if structure in _DIAGONAL_STRUCTURES and dte <= C.OPT_DTE_EXIT_CREDIT:
+        return True, f"DTE {dte} ≤ {C.OPT_DTE_EXIT_CREDIT} (diagonal/time)"
     if structure in _DEBIT_STRUCTURES and dte <= C.OPT_DTE_EXIT_DEBIT:
         return True, f"DTE {dte} ≤ {C.OPT_DTE_EXIT_DEBIT} (debit/time)"
     return False, ""
@@ -136,6 +151,11 @@ def _connect():
         print("ERROR: ib_insync not installed")
         return None
     try:
+        import asyncio
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
         ib = IB()
         ib.connect(TWS_HOST, TWS_PORT, clientId=C.TWS_PORTFOLIO_CLIENT,
                    timeout=5, readonly=True)
@@ -205,42 +225,49 @@ def _underlying_price(ib, ticker: str) -> float | None:
 # ── position matching ─────────────────────────────────────────────────────────
 
 def _match_positions_to_journal(positions, journal: dict[str, dict]) -> list[dict]:
-    """Match live positions to journal entries by ticker + account + leg details."""
+    """Match live positions to journal entries by ticker + account + leg details.
+    One row per orderRef — deduplicates multi-leg structures (e.g. diagonal with 2 OPT legs).
+    """
     rows = []
+    seen_refs: set[str] = set()
     for pos in positions:
         if pos.contract.secType not in ("OPT", "BAG", "STK"):
             continue
-            
+
         ticker  = pos.contract.symbol
         account = pos.account
-        
+
         # Find best matching journal record
         best_rec = None
+        best_ref = ""
         for ref, rec in journal.items():
             if rec.get("ticker") != ticker or rec.get("account") != account:
                 continue
-            
+
             # If it's an option, try to verify it belongs to this trade's strikes/expiry
             if pos.contract.secType == "OPT":
                 order = rec.get("order", {})
                 p_strike = pos.contract.strike
                 p_expiry = pos.contract.lastTradeDateOrContractMonth # YYYYMMDD
-                
+
                 j_long_s = order.get("long_strike")
                 j_short_s = order.get("short_strike")
                 j_exp = (order.get("expiry") or "").replace("-", "")
                 j_exp_f = (order.get("expiry_front") or "").replace("-", "")
-                
+
                 # Broad match: if strikes or expiry match either leg, it belongs to this journaled trade
                 if (p_strike in (j_long_s, j_short_s)) or (p_expiry in (j_exp, j_exp_f)):
                     best_rec = rec
+                    best_ref = ref
                     break
             else:
                 # For STK, ticker+account is sufficient
                 best_rec = rec
+                best_ref = ref
                 break
-                
-        if best_rec:
+
+        if best_rec and best_ref not in seen_refs:
+            seen_refs.add(best_ref)
             rows.append({"position": pos, "journal": best_rec})
     return rows
 
@@ -343,9 +370,10 @@ def get_portfolio_data() -> dict:
         return {"ok": True, "positions": data}
     finally:
         ib.disconnect()
-        print("═" * 78)
-        return
 
+
+def _render_table(rows, ib):
+    """CLI table renderer — called by run()."""
     today = date.today()
     for row in rows:
         pos = row["position"]
@@ -362,18 +390,15 @@ def get_portfolio_data() -> dict:
         expiry_str = order.get("expiry", "")
         limit_px  = order.get("limit_price", 0)
 
-        # DTE
         try:
             exp_date = date.fromisoformat(expiry_str)
             dte = (exp_date - today).days
         except Exception:
             dte = -1
 
-        # Live mark
         mark = _get_mark(ib, pos.contract)
         mark_str = f"${mark:.2f}" if mark else "STALE"
 
-        # P&L% display
         pnl_str = "?"
         if mark is not None:
             if order.get("type") == "shares" and (entry_px := order.get("entry")):
@@ -386,10 +411,7 @@ def get_portfolio_data() -> dict:
                 pnl = (net_credit * 100 * contracts - mark * 100 * contracts) / (max_loss * contracts) * 100
                 pnl_str = f"{pnl:+.0f}%"
 
-        # Exit signals
         signals = []
-
-        # Signal 1: underlying price
         target_val = order.get("target_value") or order.get("target")
         stop_val   = order.get("stop") or (order.get("entry_price", 0) - C.STOP_ATR_MULT * order.get("atr", 0))
         if target_val and stop_val:
@@ -398,8 +420,6 @@ def get_portfolio_data() -> dict:
                 trig, reason = _signal_price(underlying, float(target_val), float(stop_val))
                 if trig:
                     signals.append(f"price: {reason}")
-
-        # Signal 2: P&L
         if mark is not None:
             trig, reason = _signal_pnl(
                 structure=structure, mark=mark,
@@ -408,8 +428,6 @@ def get_portfolio_data() -> dict:
             )
             if trig:
                 signals.append(reason)
-
-        # Signal 3: DTE
         if dte >= 0:
             trig, reason = _signal_dte(structure=structure, dte=dte)
             if trig:

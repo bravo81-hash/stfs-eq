@@ -1212,13 +1212,17 @@ async function mPush(type) {
     const qty = parseInt(document.getElementById('m-opt-qty').value);
     if (isNaN(qty) || qty < 1) { mSetStat('Contracts must be \u2265 1.', 'err'); return; }
     const opt = _mdata.options;
-    payload.contracts    = qty;
-    payload.structure    = opt.structure;
-    payload.expiry       = opt.expiry;
-    payload.expiry_front = opt.expiry_front;
-    payload.long_strike  = opt.long_strike;
-    payload.short_strike = opt.short_strike;
-    payload.limit_price  = parseFloat(document.getElementById('m-opt-limit').value);
+    payload.contracts             = qty;
+    payload.structure             = opt.structure;
+    payload.expiry                = opt.expiry;
+    payload.expiry_front          = opt.expiry_front;
+    payload.long_strike           = opt.long_strike;
+    payload.short_strike          = opt.short_strike;
+    payload.limit_price           = parseFloat(document.getElementById('m-opt-limit').value);
+    payload.net_debit             = opt.net_debit;
+    payload.net_credit            = opt.net_credit;
+    payload.max_loss_per_contract = opt.max_loss_per_contract;
+    payload.target_value          = opt.target_value;
   }
 
   mSetStat('Sending to TWS\u2026', 'busy');
@@ -1575,15 +1579,19 @@ def _order_json(r: dict) -> str:
     if opt and "ok" in opt:
         pp = opt["primary"]
         data["options"] = {
-            "structure":    pp["structure"],
-            "label":        pp["label"],
-            "expiry":       pp["expiry"],
-            "expiry_front": pp.get("expiry_front"),
-            "long_strike":  pp["long_strike"],
-            "short_strike": pp.get("short_strike"),
-            "limit_price":  round(pp.get("net_debit") or pp.get("net_credit") or 0, 4),
-            "dte":          pp["dte"],
-            "dte_front":    pp.get("dte_front"),
+            "structure":             pp["structure"],
+            "label":                 pp["label"],
+            "expiry":                pp["expiry"],
+            "expiry_front":          pp.get("expiry_front"),
+            "long_strike":           pp["long_strike"],
+            "short_strike":          pp.get("short_strike"),
+            "limit_price":           round(pp.get("net_debit") or pp.get("net_credit") or 0, 4),
+            "net_debit":             pp.get("net_debit"),
+            "net_credit":            pp.get("net_credit"),
+            "max_loss_per_contract": pp.get("max_loss_per_contract"),
+            "target_value":          pp.get("target_value"),
+            "dte":                   pp["dte"],
+            "dte_front":             pp.get("dte_front"),
             "sizing": [
                 {"account": s["account"], "contracts": s["contracts"], "label": s["label"]}
                 for s in opt["account_sizing"]

@@ -4,6 +4,8 @@ Replaces the old Tkinter launcher and bare-bones HTTP server.
 Serves a modern web UI on localhost:5000.
 """
 
+import atexit
+import concurrent.futures
 import json
 import logging
 import subprocess
@@ -80,11 +82,15 @@ def api_generate():
 
 # ── API: Portfolio Manager ────────────────────────────────────────────────────
 
+_portfolio_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
 @app.route("/api/portfolio", methods=["GET"])
 def api_portfolio():
-    # Run in a thread to keep the Flask thread unblocked
-    future = order_server._executor.submit(portfolio_manager.get_portfolio_data)
-    return jsonify(future.result())
+    future = _portfolio_executor.submit(portfolio_manager.get_portfolio_data)
+    try:
+        return jsonify(future.result(timeout=60))
+    except concurrent.futures.TimeoutError:
+        return jsonify({"ok": False, "error": "Portfolio fetch timed out"}), 504
 
 # ── API: Trailing Stop Daemon Control ─────────────────────────────────────────
 
@@ -174,16 +180,32 @@ def api_run_script():
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def _stop_daemon():
+    global _trailing_stop_process
+    if _trailing_stop_process is not None and _trailing_stop_process.poll() is None:
+        _trailing_stop_process.terminate()
+        try:
+            _trailing_stop_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _trailing_stop_process.kill()
+        _trailing_stop_process = None
+
+atexit.register(_stop_daemon)
+
 if __name__ == "__main__":
     # Ensure TWS connects first for order server
     try:
         order_server._executor.submit(order_server._connect_ib).result(timeout=10)
     except Exception as e:
         print(f"Warning: TWS connection failed on startup: {e}")
-        
+
+    # Auto-start trailing stop daemon
+    _trailing_stop_process = subprocess.Popen(["python3.11", "trailing_stop_manager.py"])
+    print("  ✓ Trailing stop daemon started")
+
     print("=====================================================")
     print(" 🚀 STFS-EQ Web Dashboard is live!")
     print(" 🌐 http://127.0.0.1:5001")
     print("=====================================================")
-    
+
     app.run(host="127.0.0.1", port=5001, debug=False)

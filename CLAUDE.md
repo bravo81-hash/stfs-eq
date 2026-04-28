@@ -140,11 +140,36 @@ does NOT block — consistent with the manual-transmit discipline.
 
 ### Trade journal (self-improvement loop seed)
 `order_server` calls `journal.append_entry` on every successful order placement,
-writing to `output/trade_journal.jsonl`. Each line captures: signal context
+writing to `data/trade_journal.jsonl`. Each line captures: signal context
 (regime, score, quality, factors, IVP, BT test stats, earnings_date) +
-order details (account, structure, IDs). A future analysis pass can compare
-realized outcomes against the backtest's expected expectancy_R to detect signal
-drift. The journal is best-effort — never blocks order placement on I/O failure.
+order details (account, structure, IDs, **net_debit/net_credit/max_loss_per_contract/target_value**).
+Financial fields must be present in the journal for portfolio_manager exit signals to work.
+Full chain: `battle_card._order_json()` → JS modal payload → `order_server._place_options()` journal save.
+A future analysis pass can compare realized outcomes against the backtest's expected expectancy_R
+to detect signal drift. The journal is best-effort — never blocks order placement on I/O failure.
+
+### Portfolio manager exit signals
+`portfolio_manager.get_portfolio_data()` evaluates three independent signals per position:
+1. **Price**: underlying vs `target_value` / `stop` from journal
+2. **P&L%**: structure-specific thresholds (see below)
+3. **DTE**: time exit when option runs short
+
+Structure sets for exit logic:
+- `_DEBIT_STRUCTURES = {"long_call", "debit_spread"}` — P&L target +150%, stop at -80%, DTE exit at 14
+- `_CREDIT_STRUCTURES = {"credit_spread"}` — target 50% of max credit, stop at 80% of max loss, DTE exit at 21
+- `_DIAGONAL_STRUCTURES = {"diagonal"}` — P&L target +50% (`DIAGONAL_TARGET_MULT - 1.0`), stop at -80%, DTE exit at 21
+
+Position deduplication: `_match_positions_to_journal` tracks `seen_refs` (orderRef set) — a diagonal
+with two OPT legs in TWS produces two position objects but only one row in the portfolio table.
+
+`_connect()` must call `asyncio.set_event_loop(asyncio.new_event_loop())` before `IB()` when
+running from a ThreadPoolExecutor thread (no event loop in worker threads by default).
+
+### Trailing stop daemon lifecycle
+Dashboard auto-starts `trailing_stop_manager.py` (clientId=17) on launch via `subprocess.Popen`.
+`atexit.register(_stop_daemon)` ensures it terminates cleanly when dashboard.py exits — no orphaned
+processes. The daemon is harmless pre-market (TRAIL_ACTIVATE_R=1.0 means no stops are moved until
+≥1R profit; no live prices pre-market means no triggers fire).
 
 ### Bonus momentum factors (Pine v3 — additive, not part of core 8)
 `bonus_rsi_slope` (RSI[0] > RSI[3]) and `bonus_atr_expansion`
@@ -215,10 +240,12 @@ SPREAD_ATR_MULT  = 2.0  # options spread width = 2×ATR
 ## What NOT to change without full context
 
 - `transmit=False` on all orders
-- clientId assignments (15/16)
+- clientId assignments (15/16/17/18)
 - The IVP formula (`sum(v < current_iv) / len(iv_vals) * 100`)
 - The `--no-open` flag pattern in launcher.py subprocess call
 - The `_TWS_TICKER` alias maps in both tws_data.py and order_server.py
+- `_DIAGONAL_STRUCTURES` separate from `_CREDIT_STRUCTURES` — diagonal uses net_debit (not net_credit), 50% gain target (not credit-capture logic)
+- Financial fields in journal (net_debit/net_credit/max_loss_per_contract/target_value) — removing breaks portfolio P&L signals
 
 ---
 
