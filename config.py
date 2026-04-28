@@ -255,3 +255,22 @@ EARNINGS_WARN_DAYS        = 14    # show amber badge if earnings within N days
 # =====================================================================
 OUTPUT_DIR          = "output"
 AUTO_OPEN_IN_BROWSER = True
+
+# =====================================================================
+# TRAILING STOP MANAGER (trailing_stop_manager.py — clientId=17)
+# =====================================================================
+TRAIL_MA_TYPE         = "EMA"   # "EMA" or "HMA" — which MA the stop trails
+TRAIL_MA_LEN          = 10      # lookback bars for trail MA
+TRAIL_ACTIVATE_R      = 1.0     # profit in R-multiples before trailing activates
+                                 # 1.0 = full risk distance (STOP_ATR_MULT × ATR)
+TRAIL_POLL_INTERVAL   = 300     # seconds between polls (5 min)
+TWS_TRAIL_CLIENT      = 17      # clientId — must not clash with 15/16/18
+
+# =====================================================================
+# PORTFOLIO MANAGER (portfolio_manager.py — clientId=18)
+# =====================================================================
+OPT_DTE_EXIT_CREDIT   = 21      # flag credit spreads / diagonal front at or below this DTE
+OPT_DTE_EXIT_DEBIT    = 14      # flag long calls / debit spreads at or below this DTE
+OPT_PNL_STOP_PCT      = 0.80    # flag if position is down >= 80% of max loss
+TWS_PORTFOLIO_CLIENT  = 18      # clientId — read-only
+STFS_ORDER_REF_PREFIX = "STFS-EQ-"  # prefix on orderRef for all placed orders
