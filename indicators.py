@@ -132,12 +132,18 @@ def compute_factors(df: pd.DataFrame, bench_df: pd.DataFrame, is_benchmark: bool
     bonus_atr_expansion = (af_pct / as_pct.replace(0, np.nan)) > C.BONUS_ATR_EXPANSION_MIN
     momentum_bonus = bonus_rsi_slope.fillna(False).astype(int) + bonus_atr_expansion.fillna(False).astype(int)
 
+    if C.TRAIL_MA_TYPE == "HMA":
+        trail_ma = hma(cl, C.TRAIL_MA_LEN)
+    else:
+        trail_ma = ema(cl, C.TRAIL_MA_LEN)
+
     return {
         "f1": f1, "f2": f2, "f3": f3, "f4": f4,
         "f5": f5, "f6": f6, "f7": f7, "f8": f8,
         "score": score, "trio": trio, "strong_buy": strong_buy,
         "rs_pct": rs_pct, "atr": at, "atr_pct": atr_pct,
         "rsi": rs_s, "adx": adx_s, "hma": hm,
+        "trail_ma": trail_ma,
         "bonus_rsi_slope": bonus_rsi_slope.fillna(False),
         "bonus_atr_expansion": bonus_atr_expansion.fillna(False),
         "momentum_bonus": momentum_bonus,
