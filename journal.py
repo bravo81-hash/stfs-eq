@@ -18,7 +18,7 @@ from pathlib import Path
 
 import config as C
 
-_JOURNAL_PATH = Path(__file__).parent / C.OUTPUT_DIR / "trade_journal.jsonl"
+_JOURNAL_PATH = Path(__file__).parent / C.JOURNAL_PATH
 
 
 def append_entry(event: str, ticker: str, account: str,

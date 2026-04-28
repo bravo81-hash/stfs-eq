@@ -40,11 +40,11 @@ fi
 # 2. Check required packages
 echo ""
 echo "▸ Checking packages..."
-$PY -c "import yfinance, pandas, numpy, requests, tkinter" 2>/dev/null && {
+$PY -c "import yfinance, pandas, numpy, requests, tkinter, flask" 2>/dev/null && {
     echo "  ✓ All packages present"
 } || {
     echo "  ▸ Installing missing packages..."
-    $PY -m pip install --user yfinance pandas numpy requests 2>&1 | tail -3
+    $PY -m pip install --user yfinance pandas numpy requests flask 2>&1 | tail -3
     echo "  ✓ Done"
 }
 

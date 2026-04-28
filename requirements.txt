@@ -1,0 +1,8 @@
+flask
+yfinance
+pandas
+numpy
+requests
+ib_insync
+pytest
+pytest-asyncio

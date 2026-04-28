@@ -34,7 +34,7 @@ from pathlib import Path
 
 import config as C
 
-JOURNAL = Path(__file__).parent / C.OUTPUT_DIR / "trade_journal.jsonl"
+JOURNAL = Path(C.JOURNAL_PATH)
 
 
 # ─── journal helpers ────────────────────────────────────────────────────────

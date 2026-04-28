@@ -32,7 +32,7 @@ TWS_HOST = "127.0.0.1"
 TWS_PORT = 7496
 ET       = ZoneInfo("America/New_York")
 
-_JOURNAL_PATH = Path(C.OUTPUT_DIR) / "trade_journal.jsonl"
+_JOURNAL = Path(C.JOURNAL_PATH)
 
 # Structures that use long-premium exit DTE threshold
 _DEBIT_STRUCTURES = {"long_call", "debit_spread"}
@@ -105,10 +105,10 @@ def _signal_dte(structure: str, dte: int) -> tuple[bool, str]:
 def _load_journal_options(account_filter: str | None = None) -> dict[str, dict]:
     """Return {orderRef: journal_entry} for all STFS-EQ options entries.
     Most recent entry wins if duplicate orderRefs exist."""
-    if not _JOURNAL_PATH.exists():
+    if not _JOURNAL.exists():
         return {}
     result: dict[str, dict] = {}
-    with _JOURNAL_PATH.open() as f:
+    with _JOURNAL.open() as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -120,8 +120,7 @@ def _load_journal_options(account_filter: str | None = None) -> dict[str, dict]:
             order = rec.get("order", {})
             ref = order.get("orderRef", "")
             if (
-                order.get("type") == "options"
-                and ref.startswith(C.STFS_ORDER_REF_PREFIX)
+                order.get("type") in ("options", "shares")
                 and (account_filter is None or rec.get("account") == account_filter)
             ):
                 result[ref] = rec
@@ -147,17 +146,40 @@ def _connect():
 
 
 def _get_mark(ib, contract) -> float | None:
-    """Fetch bid/ask snapshot; fall back to last price."""
+    """Fetch bid/ask snapshot; fall back to last price or historical close."""
     try:
-        td = ib.reqMktData(contract, "", snapshot=True, regulatorySnapshot=False)
-        ib.sleep(2)
+        # Ensure we have conId etc
+        ib.qualifyContracts(contract)
+        
+        # 1. Try a faster ticker update (since we might already be receiving data)
+        ticker = ib.reqMktData(contract, "", snapshot=True, regulatorySnapshot=False)
+        
+        # Poll for up to 3 seconds
+        for _ in range(6):
+            ib.sleep(0.5)
+            bid = float(ticker.bid) if ticker.bid and ticker.bid > 0 else 0.0
+            ask = float(ticker.ask) if ticker.ask and ticker.ask > 0 else 0.0
+            if bid > 0 and ask > 0:
+                ib.cancelMktData(contract)
+                return (bid + ask) / 2
+            
+            last = float(ticker.last) if ticker.last and ticker.last > 0 else 0.0
+            if last > 0:
+                ib.cancelMktData(contract)
+                return last
+        
         ib.cancelMktData(contract)
-        bid = float(td.bid) if td.bid and td.bid > 0 else 0.0
-        ask = float(td.ask) if td.ask and td.ask > 0 else 0.0
-        if bid > 0 and ask > 0:
-            return (bid + ask) / 2
-        last = float(td.last) if td.last and td.last > 0 else 0.0
-        return last if last > 0 else None
+
+        # 2. If market closed/no data, try historical last bar
+        bars = ib.reqHistoricalData(
+            contract, endDateTime="", durationStr="1 D",
+            barSizeSetting="1 min", whatToShow="MIDPOINT" if contract.secType == "OPT" else "TRADES",
+            useRTH=False, formatDate=1, keepUpToDate=False
+        )
+        if bars:
+            return float(bars[-1].close)
+            
+        return None
     except Exception:
         return None
 
@@ -183,37 +205,144 @@ def _underlying_price(ib, ticker: str) -> float | None:
 # ── position matching ─────────────────────────────────────────────────────────
 
 def _match_positions_to_journal(positions, journal: dict[str, dict]) -> list[dict]:
-    """Match live options positions to journal entries by ticker + account."""
-    by_ticker_acct: dict[tuple, dict] = {}
-    for ref, rec in journal.items():
-        key = (rec.get("ticker", ""), rec.get("account", ""))
-        by_ticker_acct[key] = rec
-
+    """Match live positions to journal entries by ticker + account + leg details."""
     rows = []
     for pos in positions:
-        if pos.contract.secType not in ("OPT", "BAG"):
+        if pos.contract.secType not in ("OPT", "BAG", "STK"):
             continue
+            
         ticker  = pos.contract.symbol
         account = pos.account
-        key     = (ticker, account)
-        rec     = by_ticker_acct.get(key)
-        if rec is None:
-            continue
-        rows.append({"position": pos, "journal": rec})
+        
+        # Find best matching journal record
+        best_rec = None
+        for ref, rec in journal.items():
+            if rec.get("ticker") != ticker or rec.get("account") != account:
+                continue
+            
+            # If it's an option, try to verify it belongs to this trade's strikes/expiry
+            if pos.contract.secType == "OPT":
+                order = rec.get("order", {})
+                p_strike = pos.contract.strike
+                p_expiry = pos.contract.lastTradeDateOrContractMonth # YYYYMMDD
+                
+                j_long_s = order.get("long_strike")
+                j_short_s = order.get("short_strike")
+                j_exp = (order.get("expiry") or "").replace("-", "")
+                j_exp_f = (order.get("expiry_front") or "").replace("-", "")
+                
+                # Broad match: if strikes or expiry match either leg, it belongs to this journaled trade
+                if (p_strike in (j_long_s, j_short_s)) or (p_expiry in (j_exp, j_exp_f)):
+                    best_rec = rec
+                    break
+            else:
+                # For STK, ticker+account is sufficient
+                best_rec = rec
+                break
+                
+        if best_rec:
+            rows.append({"position": pos, "journal": best_rec})
     return rows
 
 
 # ── display ───────────────────────────────────────────────────────────────────
 
-def _render_table(rows: list[dict], ib) -> None:
-    now_et = datetime.now(ET).strftime("%Y-%m-%d %H:%M ET")
-    print(f"\nSTFS-EQ Portfolio  {now_et}          TWS: connected")
-    print("═" * 78)
-    print(f"{'TICKER':<8} {'ACCT':<8} {'STRUCTURE':<20} {'ENTRY':>8} {'MARK':>7} {'P&L%':>7} {'DTE':>5}  SIGNAL")
-    print("─" * 78)
+# ── dashboard helper ─────────────────────────────────────────────────────────
 
-    if not rows:
-        print("  No STFS-EQ options positions found.")
+def get_portfolio_data() -> dict:
+    """Consolidated logic for the Web Dashboard."""
+    ib = _connect()
+    if not ib:
+        return {"ok": False, "error": "Could not connect to TWS"}
+        
+    try:
+        journal = _load_journal_options(None)
+        positions = ib.positions()
+        rows = _match_positions_to_journal(positions, journal)
+        
+        data = []
+        today = date.today()
+        
+        for row in rows:
+            pos = row["position"]
+            rec = row["journal"]
+            order = rec.get("order", {})
+            
+            ticker = rec.get("ticker", pos.contract.symbol)
+            account = rec.get("account", pos.account)
+            structure = order.get("structure", "?")
+            
+            # Fetch mark
+            mark = _get_mark(ib, pos.contract)
+            
+            # DTE
+            expiry_str = order.get("expiry", "")
+            try:
+                exp_date = date.fromisoformat(expiry_str)
+                dte = (exp_date - today).days
+            except:
+                dte = -1
+                
+            # Signals
+            signals = []
+            target_val = order.get("target_value") or order.get("target")
+            stop_val = order.get("stop") or (order.get("entry_price", 0) - C.STOP_ATR_MULT * order.get("atr", 0))
+            
+            if target_val and stop_val:
+                underlying = _underlying_price(ib, ticker)
+                if underlying:
+                    trig, reason = _signal_price(underlying, float(target_val), float(stop_val))
+                    if trig: signals.append(f"price: {reason}")
+            
+            if mark is not None:
+                trig, reason = _signal_pnl(
+                    structure=structure, mark=mark,
+                    net_debit=order.get("net_debit"), net_credit=order.get("net_credit"),
+                    max_loss_per_contract=order.get("max_loss_per_contract", 0),
+                    contracts=order.get("contracts", int(abs(pos.position)))
+                )
+                if trig: signals.append(reason)
+                
+            if dte >= 0:
+                trig, reason = _signal_dte(structure=structure, dte=dte)
+                if trig: signals.append(reason)
+                
+            # Formatting
+            if not signals:
+                signal_state, signal_text = "HOLD", "Holding steady"
+            elif any("stop" in s.lower() or "loss" in s.lower() for s in signals):
+                signal_state, signal_text = "CLOSE_DANGER", "⛔ " + signals[0]
+            else:
+                signal_state, signal_text = "CLOSE_WARN", "⚠ " + signals[0]
+                
+            # PnL%
+            pnl_str = "?"
+            if mark is not None:
+                if order.get("type") == "shares" and (entry_px := order.get("entry")):
+                    pnl = (mark - entry_px) / entry_px * 100
+                    pnl_str = f"{pnl:+.1f}%"
+                elif (net_debit := order.get("net_debit")) and net_debit > 0:
+                    pnl = (mark * 100 * abs(pos.position) - net_debit * 100 * abs(pos.position)) / (net_debit * 100 * abs(pos.position)) * 100
+                    pnl_str = f"{pnl:+.0f}%"
+                elif (net_credit := order.get("net_credit")) and net_credit > 0:
+                    max_loss = order.get("max_loss_per_contract", 0)
+                    pnl = (net_credit * 100 * abs(pos.position) - mark * 100 * abs(pos.position)) / (max_loss * abs(pos.position)) * 100
+                    pnl_str = f"{pnl:+.0f}%"
+
+            data.append({
+                "ticker": ticker,
+                "account": account,
+                "structure": structure,
+                "mark": round(mark, 2) if mark else None,
+                "pnl_str": pnl_str,
+                "dte": dte,
+                "signal_state": signal_state,
+                "signal_text": signal_text
+            })
+            
+        return {"ok": True, "positions": data}
+    finally:
+        ib.disconnect()
         print("═" * 78)
         return
 
@@ -246,12 +375,16 @@ def _render_table(rows: list[dict], ib) -> None:
 
         # P&L% display
         pnl_str = "?"
-        if mark is not None and (net_debit or net_credit):
-            if net_debit and net_debit > 0:
+        if mark is not None:
+            if order.get("type") == "shares" and (entry_px := order.get("entry")):
+                pnl = (mark - entry_px) / entry_px * 100
+                pnl_str = f"{pnl:+.1f}%"
+            elif net_debit and net_debit > 0:
                 pnl = (mark * 100 * contracts - net_debit * 100 * contracts) / (net_debit * 100 * contracts) * 100
-            else:
+                pnl_str = f"{pnl:+.0f}%"
+            elif net_credit and net_credit > 0:
                 pnl = (net_credit * 100 * contracts - mark * 100 * contracts) / (max_loss * contracts) * 100
-            pnl_str = f"{pnl:+.0f}%"
+                pnl_str = f"{pnl:+.0f}%"
 
         # Exit signals
         signals = []

@@ -251,9 +251,11 @@ VEGA_DROP_TEST            = 10.0  # vega points; "BE @ -10v" assumed shock for b
 EARNINGS_WARN_DAYS        = 14    # show amber badge if earnings within N days
 
 # =====================================================================
-# OUTPUT
+# DATA & OUTPUT
 # =====================================================================
-OUTPUT_DIR          = "output"
+DATA_DIR             = "data"
+JOURNAL_PATH         = "data/trade_journal.jsonl"
+OUTPUT_DIR           = "output"
 AUTO_OPEN_IN_BROWSER = True
 
 # =====================================================================

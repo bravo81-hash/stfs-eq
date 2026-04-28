@@ -31,14 +31,19 @@ and right-click → Transmits in TWS — no auto-execution ever.
 | File | Purpose |
 |------|---------|
 | `config.py` | **Single source of truth for all parameters.** Edit only here. |
-| `launcher.py` | Tkinter GUI entry point. Starts order server + battle card subprocess. |
+| `launcher.py` | Desktop entry point (boots Flask + browser) |
+| `dashboard.py` | Core Web Dashboard server (Port 5001) |
+| `web/` | UI (HTML/CSS/JS) |
 | `battle_card.py` | Core scoring, composite-quality ranking, trade sizing, options plans, HTML. |
 | `regime.py` | Auto-regime detection (drift/vol/term/skew/credit/event + sector RRG). |
 | `tws_data.py` | TWS API calls: OHLC, IVP, live price, options chain, index feeds. clientId=15 (readonly). |
-| `order_server.py` | HTTP order API. clientId=16 (read-write). localhost:5001. Appends to `output/trade_journal.jsonl` on success. |
+| `order_server.py` | HTTP order API. clientId=16 (read-write). localhost:5001. |
+| `portfolio_manager.py` | Portfolio monitor (clientId=18) |
+| `trailing_stop_manager.py` | Stop daemon (clientId=17) |
 | `backtest.py` | Standalone CLI backtester (in-sample diagnostic). Imports indicators from `indicators.py`. |
 | `indicators.py` | **Single source of truth** for the 8-factor scoring rules. `compute_factors()` is called by both live signal (`score_ticker`) and the walk-forward mini-backtest — eliminates drift. |
-| `journal.py` | Append-only JSONL trade journal (signal context + order). Best-effort, never blocks orders. |
+| `journal.py` | Journal writer. |
+| `data/trade_journal.jsonl` | Persistent trade history (Synced via git). Append-only. Never blocks orders. |
 | `optimizer.py` | Parameter sweep: finds optimal ENTRY/STOP/TARGET ATR multiples. |
 | `expectancy_optimizer.py` | Factor analysis: tests all 256 combinations of the 8 scoring factors. |
 | `stfs_eq_dashboard.pine` | TradingView PineScript v2.1 — kept in sync with Python config. |

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STFS-EQ Dashboard</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Persistent Sidebar -->
+    <nav class="sidebar">
+        <div class="logo">
+            <h2>STFS-EQ</h2>
+            <p>Systematic Trading</p>
+        </div>
+        <ul class="nav-links">
+            <li class="active" data-tab="launchpad">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                Launchpad
+            </li>
+            <li data-tab="portfolio">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 13v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2m18 0v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6m18 0H3m6-6v2m6-2v2"></path></svg>
+                Portfolio
+            </li>
+            <li data-tab="analytics">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                Analytics
+            </li>
+            <li data-tab="tools">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+                Tools
+            </li>
+            <li data-tab="settings">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                Settings
+            </li>
+        </ul>
+
+        <!-- Trailing Stop Daemon Control -->
+        <div class="daemon-control glass-panel">
+            <div class="daemon-header">
+                <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <span>Trailing Stop</span>
+            </div>
+            <div class="toggle-container">
+                <span class="status-indicator" id="daemon-indicator"></span>
+                <span class="status-text" id="daemon-text">Checking...</span>
+                <label class="switch">
+                    <input type="checkbox" id="daemon-toggle" disabled>
+                    <span class="slider round"></span>
+                </label>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="content">
+        
+        <!-- Top Bar -->
+        <header class="top-bar glass-panel">
+            <h1 id="page-title">Launchpad</h1>
+            <div class="connection-status">
+                <span class="indicator red" id="tws-indicator"></span>
+                <span id="tws-text">TWS Offline</span>
+            </div>
+        </header>
+
+        <!-- Launchpad Tab -->
+        <section id="launchpad" class="tab-content active">
+            <div class="control-panel glass-panel">
+                <div class="form-group">
+                    <label for="regime-select">Market Regime</label>
+                    <select id="regime-select">
+                        <option value="AUTO">AUTO (Detect)</option>
+                        <option value="CRASH">CRASH (Hold Cash)</option>
+                        <option value="RISK_OFF">RISK OFF (Defensive)</option>
+                        <option value="LIQUIDITY">LIQUIDITY (Beta Chasing)</option>
+                        <option value="REFLATION">REFLATION (Cyclicals)</option>
+                        <option value="GOLDILOCKS">GOLDILOCKS (Growth)</option>
+                        <option value="NEUTRAL">NEUTRAL (Stock Pickers)</option>
+                    </select>
+                </div>
+                <button id="btn-generate" class="primary-btn">
+                    <span class="btn-text">Generate Battle Card</span>
+                    <span class="loader hidden"></span>
+                </button>
+            </div>
+
+            <!-- The iframe where battle_card.html is displayed -->
+            <div class="card-container glass-panel">
+                <iframe id="battle-card-frame" src="about:blank"></iframe>
+                <div id="card-placeholder" class="placeholder">
+                    <svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                    <p>Select a regime and generate the Battle Card to view trade candidates.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Portfolio Tab -->
+        <section id="portfolio" class="tab-content">
+            <div class="portfolio-header glass-panel">
+                <div class="ph-left">
+                    <h2>Live Positions</h2>
+                    <p>Advisory exit signals based on P&L, Price targets, and Time/DTE.</p>
+                </div>
+                <button id="btn-refresh-portfolio" class="secondary-btn">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    Refresh
+                </button>
+            </div>
+
+            <div class="table-container glass-panel">
+                <table id="portfolio-table">
+                    <thead>
+                        <tr>
+                            <th>Ticker</th>
+                            <th>Account</th>
+                            <th>Structure</th>
+                            <th>Mark</th>
+                            <th>P&L%</th>
+                            <th>DTE</th>
+                            <th>Signal</th>
+                        </tr>
+                    </thead>
+                    <tbody id="portfolio-body">
+                        <!-- Populated by JS -->
+                        <tr class="empty-row"><td colspan="7">Loading portfolio data...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Analytics Tab -->
+        <section id="analytics" class="tab-content">
+            <div class="glass-panel placeholder-panel">
+                <h2>Journal Analytics</h2>
+                <p>Visual charts of your trade_journal.jsonl will appear here in Phase 6.</p>
+            </div>
+        </section>
+
+        <!-- Tools Tab -->
+        <section id="tools" class="tab-content">
+            <div class="glass-panel" style="padding: 24px;">
+                <h2 style="margin-bottom: 16px;">Individual Backtest</h2>
+                <div class="form-group" style="flex-direction: row; align-items: flex-end; gap: 16px;">
+                    <div>
+                        <label>Ticker(s)</label>
+                        <input type="text" id="bt-tickers" placeholder="e.g. AAPL MSFT" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: white; padding: 10px; border-radius: 8px;">
+                    </div>
+                    <div>
+                        <label>Days</label>
+                        <input type="number" id="bt-days" value="1500" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: white; padding: 10px; border-radius: 8px; width: 100px;">
+                    </div>
+                    <button id="btn-run-backtest" class="primary-btn">Run Backtest</button>
+                </div>
+            </div>
+
+            <div class="glass-panel" style="padding: 24px;">
+                <h2 style="margin-bottom: 16px;">Log Trade Outcome</h2>
+                <div class="form-group" style="flex-direction: row; align-items: flex-end; gap: 16px;">
+                    <div>
+                        <label>Ticker</label>
+                        <input type="text" id="log-ticker" placeholder="AAPL" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: white; padding: 10px; border-radius: 8px; width: 100px;">
+                    </div>
+                    <div>
+                        <label>Exit Date</label>
+                        <input type="text" id="log-date" placeholder="YYYY-MM-DD" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: white; padding: 10px; border-radius: 8px;">
+                    </div>
+                    <div>
+                        <label>Exit Price $</label>
+                        <input type="text" id="log-price" placeholder="150.50" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: white; padding: 10px; border-radius: 8px; width: 100px;">
+                    </div>
+                    <button id="btn-log-outcome" class="secondary-btn">Log Outcome</button>
+                </div>
+                <div style="margin-top: 16px;">
+                    <button id="btn-analyze-journal" class="primary-btn" style="background: #a060ff;">Analyze Journal</button>
+                </div>
+            </div>
+            
+            <!-- Terminal Output Window for Tools -->
+            <div class="glass-panel" style="padding: 0; display: flex; flex-direction: column; flex-grow: 1;">
+                <div style="padding: 12px 16px; border-bottom: 1px solid var(--border-color); font-size: 12px; font-weight: bold; color: var(--text-muted); background: rgba(0,0,0,0.2);">TERMINAL OUTPUT</div>
+                <pre id="tools-terminal" style="margin:0; padding: 16px; background: #080c12; color: #d4dff5; font-family: Courier, monospace; font-size: 13px; flex-grow: 1; overflow-y: auto; max-height: 400px; white-space: pre-wrap;"></pre>
+            </div>
+        </section>
+
+        <!-- Settings Tab -->
+        <section id="settings" class="tab-content">
+            <div class="glass-panel" style="padding: 24px;">
+                <h2 style="margin-bottom: 16px;">Account Sizing</h2>
+                <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 24px;">Edit your accounts directly. This will update <code>config.py</code> automatically.</p>
+                <div id="accounts-container" style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px;">
+                    <div style="color: var(--text-muted); padding: 20px;">Loading accounts...</div>
+                </div>
+                <button id="btn-save-accounts" class="primary-btn">Save Accounts</button>
+            </div>
+        </section>
+
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
