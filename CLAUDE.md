@@ -95,12 +95,15 @@ take a `THIN_HISTORY_PENALTY` haircut (default 15%) and show a `(thin)` tag in H
 Sort order is now `quality DESC, score DESC, rs_pct DESC` — score-only sort is retired.
 
 ### Walk-forward mini-backtest with friction
-`battle_card.run_mini_backtest()` splits the lookback into train (`BACKTEST_TRAIN_PCT`,
-default 70%) and test (newest 30%). The composite quality ranker uses **test-window**
-stats (out-of-sample). HTML displays `BT-test:` prominently with a side-by-side
-`(train …)` tag so user can spot train→test degradation. Friction model:
+`battle_card.run_mini_backtest()` uses anchored walk-forward optimisation (WFO):
+anchor = first 50% of bars (fixed train); `BACKTEST_FOLDS` (default 5) test windows
+slide across the remaining 50%. The composite quality ranker uses **mean test-fold**
+stats (out-of-sample). A separate `BACKTEST_RECENT_BARS` (default 252) window gives
+a "recent era" slice independent of the fold structure. HTML displays fold mean ±std
+for win-rate and expectancy_R so train→test degradation is visible. Friction model:
 `SLIPPAGE_PCT` (default 0.05% per leg, both entry and exit) and a flat
-`COMMISSION_PER_TRADE` (fractional commission (0.001 per trade), expressed as % of notional). Both knobs in `config.py`.
+`COMMISSION_PER_TRADE` (0.001 per leg = 0.2% round-trip, as fraction of notional).
+Both knobs in `config.py`.
 
 ### Hysteresis on auto-regime
 `regime.detect_regime()` persists state to `output/.regime_state.json`. A flip

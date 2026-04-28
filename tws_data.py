@@ -112,7 +112,7 @@ def _build_long_call(calls, price, dte, expiry_iso):
         "long_strike": _sf(atm["strike"]), "short_strike": None,
         "net_debit": ask, "net_credit": None,
         "max_loss_per_contract": ask * 100,
-        "target_label": "2× debit (100% gain)",
+        "target_label": "2.5× debit (150% gain)",
         "target_value": ask * C.LONG_CALL_TARGET_MULT,
         "oi": _si(atm["openInterest"]),
     }
@@ -141,7 +141,7 @@ def _build_debit_spread(calls, price, dte, expiry_iso, width):
         "spread_width": actual_width,
         "max_loss_per_contract": net_debit * 100,
         "max_profit_per_contract": (actual_width - net_debit) * 100,
-        "target_label": "2× debit (100% gain)",
+        "target_label": "2.5× debit (150% gain)",
         "target_value": net_debit * C.DEBIT_SPREAD_TARGET_MULT,
         "oi": _si(atm["openInterest"]),
     }
@@ -229,7 +229,7 @@ def _size_options_account(primary_plan, fallback_plans, acc):
         ml = primary_plan.get("max_loss_per_contract", 0)
         if ml > 0:
             min_hint = int(math.ceil((ml / (acc["risk_pct"] / 100.0)) / 1000) * 1000)
-    notional = (max_loss_per_contract * cts) if cts > 0 else 0
+    notional = used_plan.get("max_loss_per_contract", 0) * cts if cts > 0 else 0
 
     return {
         "account":      acc["name"],

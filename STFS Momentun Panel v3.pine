@@ -7,7 +7,8 @@ indicator("STFS Momentum Panel v3", overlay=false, max_lines_count=10)
 rsiLength    = input.int(14,  "RSI Length",         minval=1)
 adxLength    = input.int(14,  "ADX Smoothing",      minval=1)
 diLength     = input.int(14,  "DI Length",          minval=1)
-atrLen       = input.int(14,  "ATR Length",         minval=1)
+atrFastLen   = input.int(10,  "ATR Fast Length",    minval=1)
+atrSlowLen   = input.int(60,  "ATR Slow Length",    minval=1)
 rsiSlopeLen  = input.int(3,   "RSI Slope Lookback", minval=1)
 adxThreshold = input.float(20,"ADX Trend Threshold",step=0.1)
 
@@ -16,16 +17,18 @@ adxThreshold = input.float(20,"ADX Trend Threshold",step=0.1)
 // ======================================================
 rsi              = ta.rsi(close, rsiLength)
 [plusDI, minusDI, adx] = ta.dmi(diLength, adxLength)
-atr              = ta.atr(atrLen)
-atrPct           = (atr / close) * 100
-atrSma           = ta.sma(atrPct, 20)
+atrFast          = ta.atr(atrFastLen)
+atrSlow          = ta.atr(atrSlowLen)
+atrFastPct       = (atrFast / close) * 100
+atrSlowPct       = (atrSlow / close) * 100
+atrRatio         = atrSlowPct > 0 ? atrFastPct / atrSlowPct : 1.0
 
 rsiRising        = rsi > rsi[rsiSlopeLen]
 rsiFalling       = rsi < rsi[rsiSlopeLen]
 
 adxStrong        = adx > adxThreshold
-atrExpanding     = atrPct > atrSma * 1.1
-atrContracting   = atrPct < atrSma * 0.9
+atrExpanding     = atrRatio > 1.10
+atrContracting   = atrRatio < 0.90
 
 diGapBull        = plusDI > minusDI
 

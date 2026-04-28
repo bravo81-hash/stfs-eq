@@ -249,7 +249,7 @@ def build_long_call(calls, price, dte, expiry):
         "long_strike": sf(atm["strike"]), "short_strike": None,
         "net_debit": ask, "net_credit": None,
         "max_loss_per_contract": ask * 100,
-        "target_label": "2× debit (100% gain)",
+        "target_label": "2.5× debit (150% gain)",
         "target_value": ask * C.LONG_CALL_TARGET_MULT,
         "oi": si(atm["openInterest"]),
     }
@@ -288,7 +288,7 @@ def build_debit_spread(calls, price, dte, expiry, width):
         "spread_width": actual_width,
         "max_loss_per_contract": net_debit * 100,
         "max_profit_per_contract": (actual_width - net_debit) * 100,
-        "target_label": "2× debit (100% gain)",
+        "target_label": "2.5× debit (150% gain)",
         "target_value": net_debit * C.DEBIT_SPREAD_TARGET_MULT,
         "oi": si(atm["openInterest"]),
     }
