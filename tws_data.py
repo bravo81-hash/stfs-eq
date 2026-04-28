@@ -229,8 +229,8 @@ def _size_options_account(primary_plan, fallback_plans, acc):
         ml = primary_plan.get("max_loss_per_contract", 0)
         if ml > 0:
             min_hint = int(math.ceil((ml / (acc["risk_pct"] / 100.0)) / 1000) * 1000)
-    notional = ((used_plan.get("net_debit") or used_plan.get("spread_width") or 0)
-                * 100 * cts) if cts > 0 else 0
+    notional = (max_loss_per_contract * cts) if cts > 0 else 0
+
     return {
         "account":      acc["name"],
         "equity":       acc["equity"],

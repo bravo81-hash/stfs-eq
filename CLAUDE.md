@@ -100,7 +100,7 @@ default 70%) and test (newest 30%). The composite quality ranker uses **test-win
 stats (out-of-sample). HTML displays `BT-test:` prominently with a side-by-side
 `(train …)` tag so user can spot train→test degradation. Friction model:
 `SLIPPAGE_PCT` (default 0.05% per leg, both entry and exit) and a flat
-`COMMISSION_PER_TRADE` ($1 per leg, expressed as % of notional). Both knobs in `config.py`.
+`COMMISSION_PER_TRADE` (fractional commission (0.001 per trade), expressed as % of notional). Both knobs in `config.py`.
 
 ### Hysteresis on auto-regime
 `regime.detect_regime()` persists state to `output/.regime_state.json`. A flip

@@ -1040,7 +1040,7 @@ MODAL_HTML = """
    <div class="mrow">
     <span class="mlbl">Target</span>
     <input id="m-sh-target" class="minp" type="number" step="0.01">
-    <span style="font-size:10px;color:var(--muted)">+2R</span>
+    <span style="font-size:10px;color:var(--muted)">+{C.TARGET_ATR_MULT/C.STOP_ATR_MULT:.1f}R</span>
    </div>
    <div class="mrow">
     <span class="mlbl">Shares</span>
