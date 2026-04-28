@@ -62,7 +62,12 @@ def run_backtest(tickers, days=1000):
         oe = ema(ob, C.OBV_EMA_LEN)
         
         atr_pct = (at / cl) * 100
-        
+
+        if C.TRAIL_MA_TYPE == "HMA":
+            trail_ma = hma(cl, C.TRAIL_MA_LEN)
+        else:
+            trail_ma = ema(cl, C.TRAIL_MA_LEN)
+
         # --- Pre-calculate Factors Vectorized ---
         f1 = (ef > em) & (em > es)
         
@@ -110,7 +115,9 @@ def run_backtest(tickers, days=1000):
         pending_stop_dist = 0.0
         pending_target_dist = 0.0
         pending_breakout = False
-        
+        trailing_active = False
+        trail_trigger = 0.0
+
         stats = {"wins": 0, "losses": 0, "total_return": 1.0}
         
         for i in range(len(df) - 1):
@@ -130,6 +137,14 @@ def run_backtest(tickers, days=1000):
                 current_unrealized = (l_tmrw - entry_price) / entry_price
                 trade_mae = min(trade_mae, current_unrealized)
 
+                # Trailing stop: activate at 1R profit, ratchet stop up only
+                if not trailing_active and h_tmrw >= entry_price + trail_trigger:
+                    trailing_active = True
+                if trailing_active:
+                    new_stop = float(trail_ma.iloc[i + 1])
+                    if new_stop > stop_loss:
+                        stop_loss = new_stop
+
                 if l_tmrw <= stop_loss:
                     pl = (stop_loss - entry_price) / entry_price
                     trades.append({
@@ -139,6 +154,7 @@ def run_backtest(tickers, days=1000):
                     if pl > 0: stats["wins"] += 1
                     else: stats["losses"] += 1
                     in_trade = False
+                    trailing_active = False
                 elif h_tmrw >= take_profit:
                     pl = (take_profit - entry_price) / entry_price
                     trades.append({
@@ -148,6 +164,7 @@ def run_backtest(tickers, days=1000):
                     if pl > 0: stats["wins"] += 1
                     else: stats["losses"] += 1
                     in_trade = False
+                    trailing_active = False
                 continue
                 
             if limit_order_active:
@@ -155,6 +172,7 @@ def run_backtest(tickers, days=1000):
                     entry_price = o_tmrw
                     stop_loss = entry_price - pending_stop_dist
                     take_profit = entry_price + pending_target_dist
+                    trail_trigger = C.TRAIL_ACTIVATE_R * pending_stop_dist
                     limit_order_active = False
                     in_trade = True
                     trade_entry_date = date_tmrw
@@ -176,6 +194,7 @@ def run_backtest(tickers, days=1000):
                         entry_price = pending_limit_price
                         stop_loss = entry_price - pending_stop_dist
                         take_profit = entry_price + pending_target_dist
+                        trail_trigger = C.TRAIL_ACTIVATE_R * pending_stop_dist
                         limit_order_active = False
                         in_trade = True
                         trade_entry_date = date_tmrw
