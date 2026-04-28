@@ -35,7 +35,6 @@ def run_backtest(tickers, days=1000):
     
     for ticker in tickers:
         if ticker == C.BENCHMARK and len(tickers) > 1:
-            # We don't backtest the benchmark itself unless explicitly requested maybe? Let's just do it.
             pass
             
         print(f"\nProcessing {ticker}...")
@@ -105,8 +104,8 @@ def run_backtest(tickers, days=1000):
         stop_loss = 0.0
         take_profit = 0.0
         trade_entry_date = None
+        trade_mae = 0.0 # Maximum Adverse Excursion tracking
         
-        # To simulate next-day limit entries 
         pending_limit_price = 0.0
         pending_stop_dist = 0.0
         pending_target_dist = 0.0
@@ -116,7 +115,7 @@ def run_backtest(tickers, days=1000):
         
         for i in range(len(df) - 1):
             date_today = df.index[i]
-            date_tmrw = df.index[i+1] # Next day's price action
+            date_tmrw = df.index[i+1]
             
             c_today = float(cl.iloc[i])
             a_today = float(at.iloc[i])
@@ -127,12 +126,15 @@ def run_backtest(tickers, days=1000):
             c_tmrw = float(cl.iloc[i+1])
             
             if in_trade:
-                # Check for stop or target hit today
+                # Track Unrealized Drawdown (MAE) before checking stops
+                current_unrealized = (l_tmrw - entry_price) / entry_price
+                trade_mae = min(trade_mae, current_unrealized)
+
                 if l_tmrw <= stop_loss:
                     pl = (stop_loss - entry_price) / entry_price
                     trades.append({
                         "ticker": ticker, "entry_date": trade_entry_date, "exit_date": date_tmrw,
-                        "type": "STOP", "pnl": pl, "entry": entry_price, "exit": stop_loss
+                        "type": "STOP", "pnl": pl, "entry": entry_price, "exit": stop_loss, "mae": trade_mae
                     })
                     if pl > 0: stats["wins"] += 1
                     else: stats["losses"] += 1
@@ -141,7 +143,7 @@ def run_backtest(tickers, days=1000):
                     pl = (take_profit - entry_price) / entry_price
                     trades.append({
                         "ticker": ticker, "entry_date": trade_entry_date, "exit_date": date_tmrw,
-                        "type": "TARGET", "pnl": pl, "entry": entry_price, "exit": take_profit
+                        "type": "TARGET", "pnl": pl, "entry": entry_price, "exit": take_profit, "mae": trade_mae
                     })
                     if pl > 0: stats["wins"] += 1
                     else: stats["losses"] += 1
@@ -150,44 +152,41 @@ def run_backtest(tickers, days=1000):
                 
             if limit_order_active:
                 if pending_breakout:
-                    # MOO executed upon Open
                     entry_price = o_tmrw
                     stop_loss = entry_price - pending_stop_dist
                     take_profit = entry_price + pending_target_dist
                     limit_order_active = False
                     in_trade = True
                     trade_entry_date = date_tmrw
+                    trade_mae = min(0.0, (l_tmrw - entry_price) / entry_price)
                     
-                    # instantly check if stop or target hit on the same day it opened
                     if l_tmrw <= stop_loss:
                         pl = (stop_loss - entry_price) / entry_price
-                        trades.append({"ticker": ticker, "entry_date": trade_entry_date, "exit_date": date_tmrw, "type": "STOP (Same Day)", "pnl": pl, "entry": entry_price, "exit": stop_loss})
+                        trades.append({"ticker": ticker, "entry_date": trade_entry_date, "exit_date": date_tmrw, "type": "STOP (Same Day)", "pnl": pl, "entry": entry_price, "exit": stop_loss, "mae": trade_mae})
                         stats["losses"] += 1
                         in_trade = False
                     elif h_tmrw >= take_profit:
                         pl = (take_profit - entry_price) / entry_price
-                        trades.append({"ticker": ticker, "entry_date": trade_entry_date, "exit_date": date_tmrw, "type": "TARGET (Same Day)", "pnl": pl, "entry": entry_price, "exit": take_profit})
+                        trades.append({"ticker": ticker, "entry_date": trade_entry_date, "exit_date": date_tmrw, "type": "TARGET (Same Day)", "pnl": pl, "entry": entry_price, "exit": take_profit, "mae": trade_mae})
                         stats["wins"] += 1
                         in_trade = False
                         
                 else:
-                    # Check if limit was hit
                     if l_tmrw <= pending_limit_price:
-                        # Limit Hit - assumes entry at limit price
                         entry_price = pending_limit_price
                         stop_loss = entry_price - pending_stop_dist
                         take_profit = entry_price + pending_target_dist
                         limit_order_active = False
                         in_trade = True
                         trade_entry_date = date_tmrw
+                        trade_mae = min(0.0, (l_tmrw - entry_price) / entry_price)
                         
                         if l_tmrw <= stop_loss:
                             pl = (stop_loss - entry_price) / entry_price
-                            trades.append({"ticker": ticker, "entry_date": trade_entry_date, "exit_date": date_tmrw, "type": "STOP (Same Day)", "pnl": pl, "entry": entry_price, "exit": stop_loss})
+                            trades.append({"ticker": ticker, "entry_date": trade_entry_date, "exit_date": date_tmrw, "type": "STOP (Same Day)", "pnl": pl, "entry": entry_price, "exit": stop_loss, "mae": trade_mae})
                             stats["losses"] += 1
                             in_trade = False
                     else:
-                         # Order expires EOD (Day Order)
                          limit_order_active = False
 
             if not in_trade and not limit_order_active:
@@ -219,32 +218,39 @@ def run_backtest(tickers, days=1000):
         return
         
     trades_df = pd.DataFrame(trades)
+    
+    # Calculate Equity Curve and Drawdown
+    trades_df['cumulative_return'] = (1 + trades_df['pnl']).cumprod()
+    trades_df['peak'] = trades_df['cumulative_return'].cummax()
+    trades_df['drawdown'] = (trades_df['cumulative_return'] - trades_df['peak']) / trades_df['peak']
+    
     wins = len(trades_df[trades_df["pnl"] > 0])
     losses = len(trades_df[trades_df["pnl"] < 0])
     total = wins + losses
     win_rate = (wins / total) * 100
     avg_win = trades_df[trades_df["pnl"] > 0]["pnl"].mean() * 100
     avg_loss = trades_df[trades_df["pnl"] < 0]["pnl"].mean() * 100
-    compounded_return = ((1 + trades_df["pnl"]).prod() - 1) * 100
+    
+    max_drawdown = trades_df['drawdown'].min() * 100
+    avg_mae = trades_df['mae'].mean() * 100
+    compounded_return = (trades_df['cumulative_return'].iloc[-1] - 1) * 100
     
     print(f"Total Trades : {total}")
     print(f"Win Rate     : {win_rate:.1f}%")
     print(f"Avg Win      : {avg_win:.1f}% (unleveraged)")
     print(f"Avg Loss     : {avg_loss:.1f}% (unleveraged)")
     print(f"Net Return   : {compounded_return:.1f}% (cumulative uncompounded sum: {trades_df['pnl'].sum()*100:.1f}%)")
+    print(f"Max Drawdown : {max_drawdown:.1f}%")
+    print(f"Average MAE  : {avg_mae:.1f}% (Intra-trade adverse excursion)")
     
     print("\n------------------------------")
     print("  PROJECTED OPTIONS PROFILE   ")
     print("  (illustrative upper bound)  ")
     print("------------------------------")
-    # Illustrative estimate: risks 1 unit (debit) per trade.
-    # Wins assumed → +150% debit (2.5× target); losses → −100% debit.
-    # Does NOT model theta decay, IV crush mid-trade, or delta < 1.
-    # Real options results will be lower — treat as directional signal only.
     opt_wins = wins * 1.5
     opt_loss = losses * -1.0
     opt_net_r = opt_wins + opt_loss
-    wr_break_even = 1.0 / (1.0 + 1.5) * 100   # break-even win rate at 1.5R payoff
+    wr_break_even = 1.0 / (1.0 + 1.5) * 100
     print(f"Assumed win payout : +150% of debit (best case, target hit)")
     print(f"Assumed max loss   : -100% of debit (stop hit)")
     print(f"Break-even win rate: {wr_break_even:.0f}% (actual: {win_rate:.1f}%)")
