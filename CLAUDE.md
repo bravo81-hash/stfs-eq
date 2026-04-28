@@ -57,6 +57,8 @@ what was done rather than what the system does. Those rot immediately and mislea
 ### TWS client IDs
 - `clientId=15` — tws_data.py, readonly, data only
 - `clientId=16` — order_server.py, read-write, order placement
+- `clientId=17` — trailing_stop_manager.py, read-write, stop modification (auto-transmit)
+- `clientId=18` — portfolio_manager.py, read-only, portfolio monitoring
 
 These must not clash. If you add another IB connection anywhere, pick a different ID.
 
