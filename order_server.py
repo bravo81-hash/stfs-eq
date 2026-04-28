@@ -8,6 +8,7 @@ Uses clientId=16 (separate from tws_data.py which uses 15).
 """
 
 import json
+import time
 import threading
 import concurrent.futures
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -57,6 +58,7 @@ def _ib_ok() -> bool:
 
 def _place_shares(data: dict) -> dict:
     from ib_insync import Stock, LimitOrder, StopOrder, MarketOrder
+    import config as C
 
     ticker  = data["ticker"]
     account = data["account"]
@@ -68,6 +70,8 @@ def _place_shares(data: dict) -> dict:
 
     if shares < 1:
         return {"ok": False, "error": "Shares must be ≥ 1"}
+
+    ref = f"{C.STFS_ORDER_REF_PREFIX}{int(time.time())}"
 
     contract = Stock(_TWS_TICKER.get(ticker, ticker), "SMART", "USD")
     _ib.qualifyContracts(contract)
@@ -85,6 +89,7 @@ def _place_shares(data: dict) -> dict:
         parent.tif = "GTC"           # Good-till-cancelled — survives pre-market setup workflow
     parent.orderId  = p_id
     parent.account  = account
+    parent.orderRef = ref
     parent.transmit = False          # HELD — no auto-execution
 
     # Take-profit leg
@@ -93,6 +98,7 @@ def _place_shares(data: dict) -> dict:
     take_profit.parentId = p_id
     take_profit.tif      = "GTC"
     take_profit.account  = account
+    take_profit.orderRef = ref
     take_profit.transmit = False
 
     # Stop-loss leg
@@ -101,11 +107,13 @@ def _place_shares(data: dict) -> dict:
     stop_loss.parentId = p_id
     stop_loss.tif      = "GTC"
     stop_loss.account  = account
+    stop_loss.orderRef = ref
     stop_loss.transmit = False
 
     for order in [parent, take_profit, stop_loss]:
         _ib.placeOrder(contract, order)
 
+    atr_at_entry = float((data.get("signal") or {}).get("atr", 0))
     entry_str = "MOO" if is_moo else f"LMT ${entry:.2f} DAY"
     _journal_append(
         event="entry",
@@ -117,6 +125,10 @@ def _place_shares(data: dict) -> dict:
             "entry": entry, "stop": stop, "target": target,
             "entry_type": "MOO" if is_moo else "LMT",
             "order_ids": [p_id, tp_id, sl_id],
+            "orderRef":      ref,
+            "stop_order_id": sl_id,
+            "atr":           atr_at_entry,
+            "entry_price":   entry,
         },
     )
     return {
@@ -124,7 +136,7 @@ def _place_shares(data: dict) -> dict:
         "message": (
             f"Bracket placed (HELD) — {shares} {ticker}  "
             f"Entry {entry_str}  ·  Stop ${stop:.2f}  ·  Target ${target:.2f}  "
-            f"·  IDs: {p_id} / {tp_id} / {sl_id}"
+            f"·  IDs: {p_id} / {tp_id} / {sl_id}  ·  ref: {ref}"
         ),
         "order_ids": [p_id, tp_id, sl_id],
     }
@@ -134,6 +146,7 @@ def _place_shares(data: dict) -> dict:
 
 def _place_options(data: dict) -> dict:
     from ib_insync import Option, Contract, ComboLeg, LimitOrder
+    import config as C
 
     ticker       = data["ticker"]
     account      = data["account"]
@@ -153,6 +166,8 @@ def _place_options(data: dict) -> dict:
     if short_strike:
         short_strike = float(short_strike)
 
+    ref = f"{C.STFS_ORDER_REF_PREFIX}{int(time.time())}"
+
     # ── Long call — single-leg order ─────────────────────────────────────────
     if structure == "long_call":
         opt = Option(ticker, expiry, long_strike, "C", "SMART")
@@ -160,6 +175,7 @@ def _place_options(data: dict) -> dict:
         order = LimitOrder("BUY", contracts, limit_price)
         order.account  = account
         order.tif      = "DAY"
+        order.orderRef = ref
         order.transmit = False
         trade = _ib.placeOrder(opt, order)
         _journal_append(
@@ -170,6 +186,7 @@ def _place_options(data: dict) -> dict:
                 "contracts": contracts, "expiry": data["expiry"],
                 "long_strike": long_strike, "limit_price": limit_price,
                 "order_ids": [trade.order.orderId],
+                "orderRef": ref,
             },
         )
         return {
@@ -177,7 +194,7 @@ def _place_options(data: dict) -> dict:
             "message": (
                 f"Long call placed (HELD) — {contracts}×  "
                 f"{ticker} {long_strike:.0f}C  exp {data['expiry']}  "
-                f"@ ${limit_price:.2f}  ·  ID: {trade.order.orderId}"
+                f"@ ${limit_price:.2f}  ·  ID: {trade.order.orderId}  ·  ref: {ref}"
             ),
             "order_ids": [trade.order.orderId],
         }
@@ -232,6 +249,7 @@ def _place_options(data: dict) -> dict:
     order = LimitOrder(combo_action, contracts, limit_price)
     order.account  = account
     order.tif      = "DAY"
+    order.orderRef = ref
     order.transmit = False
     trade = _ib.placeOrder(bag, order)
     _journal_append(
@@ -244,6 +262,7 @@ def _place_options(data: dict) -> dict:
             "long_strike": long_strike, "short_strike": short_strike,
             "limit_price": limit_price,
             "order_ids": [trade.order.orderId],
+            "orderRef": ref,
         },
     )
 
@@ -252,7 +271,7 @@ def _place_options(data: dict) -> dict:
         "message": (
             f"{structure.replace('_', ' ').title()} placed (HELD) — "
             f"{contracts}×  {ticker}  @ ${limit_price:.2f} net  "
-            f"·  ID: {trade.order.orderId}"
+            f"·  ID: {trade.order.orderId}  ·  ref: {ref}"
         ),
         "order_ids": [trade.order.orderId],
     }
