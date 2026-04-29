@@ -2,8 +2,13 @@
 manual_portfolio.py — Discretionary options combo tracker
 Tracks manual trades (SPX, RUT, ES, etc.) outside the STFS-EQ system.
 
-Cost basis is read from manual_combos.yaml — never from TWS averageCost.
-TWS clientId=19, read-only. Isolated: never touches trade_journal.jsonl or portfolio_manager.py.
+ARCHITECTURE: YAML is the sole source of truth.
+  - ib.positions() is NEVER called. TWS account data is ignored entirely.
+  - Legs come from manual_combos.yaml (your exact fills, quantities, strikes).
+  - TWS is used ONLY to fetch live mark prices and greeks for those specific contracts.
+  - P&L = (live mark - yaml fill) × yaml qty × multiplier. Never uses TWS cost basis.
+
+TWS clientId=19, read-only. Isolated from trade_journal.jsonl and portfolio_manager.py.
 
 Usage:
     python3.11 manual_portfolio.py                    # single run, all combos
@@ -28,7 +33,7 @@ TWS_PORT    = 7496
 TWS_CLIENT  = 19
 COMBOS_FILE = Path("manual_combos.yaml")
 ET          = ZoneInfo("America/New_York")
-POLL_SECS   = 4   # seconds to wait for market data after batch request
+POLL_SECS   = 6   # seconds to wait for market data after batch request
 
 
 # ── config loader ─────────────────────────────────────────────────────────────
@@ -36,8 +41,7 @@ POLL_SECS   = 4   # seconds to wait for market data after batch request
 def _load_combos(combo_filter: str | None = None) -> list[dict]:
     if not COMBOS_FILE.exists():
         raise FileNotFoundError(
-            f"{COMBOS_FILE} not found. "
-            "Copy the template and fill in your trades."
+            f"{COMBOS_FILE} not found — fill in your real trades first."
         )
     with COMBOS_FILE.open() as f:
         data = yaml.safe_load(f)
@@ -50,25 +54,41 @@ def _load_combos(combo_filter: str | None = None) -> list[dict]:
 # ── contract factory ──────────────────────────────────────────────────────────
 
 def _make_contract(leg: dict):
+    """
+    Build a TWS contract from a YAML leg definition.
+    Never reads ib.positions() — only the leg dict is used.
+
+    For SPX/RUT index options:
+      - exchange defaults to CBOE (cash-settled index options don't route via SMART)
+      - set trading_class: SPXW for weekly expirations, SPX for monthly (3rd Friday)
+      - multiplier is intentionally NOT pre-set so qualifyContracts can resolve it
+    For ES/NQ futures options:
+      - set sectype: FOP, exchange: CME, multiplier: 50
+    """
     from ib_insync import Option, FuturesOption
 
-    expiry   = leg["expiry"].replace("-", "")   # YYYYMMDD
-    symbol   = leg["symbol"].upper()
-    right    = leg["right"].upper()
-    strike   = float(leg["strike"])
-    exchange = leg.get("exchange", "SMART").upper()
-    sectype  = leg.get("sectype",  "OPT").upper()
-    mult     = str(int(leg.get("multiplier", 100)))
-    tc       = leg.get("trading_class", "")
+    expiry  = leg["expiry"].replace("-", "")   # YYYYMMDD
+    symbol  = leg["symbol"].upper()
+    right   = leg["right"].upper()
+    strike  = float(leg["strike"])
+    sectype = leg.get("sectype", "OPT").upper()
+    tc      = leg.get("trading_class", "")
+
+    # Default exchange: CBOE for cash-settled index options, SMART for equities
+    exchange = leg.get("exchange", "CBOE" if symbol in ("SPX", "RUT", "NDX", "VIX") else "SMART").upper()
 
     if sectype == "FOP":
         c = FuturesOption(symbol, expiry, strike, right, exchange)
     else:
         c = Option(symbol, expiry, strike, right, exchange)
 
-    c.multiplier = mult
     if tc:
         c.tradingClass = tc
+
+    # Only set multiplier for FOP where TWS needs a hint; OPT multiplier resolved by qualifyContracts
+    if sectype == "FOP" and "multiplier" in leg:
+        c.multiplier = str(int(leg["multiplier"]))
+
     return c
 
 
@@ -94,28 +114,64 @@ def _connect():
         return None
 
 
+# ── contract qualification ────────────────────────────────────────────────────
+
+def _qualify_leg(ib, contract, leg_label: str) -> str | None:
+    """
+    Qualify a single contract. Returns None on success, error string on failure.
+    Checks conId > 0 after qualification — unqualified contracts silently produce no data.
+    """
+    try:
+        ib.qualifyContracts(contract)
+    except Exception as e:
+        return f"qualifyContracts failed: {e}"
+
+    if not contract.conId or contract.conId == 0:
+        return (
+            f"conId=0 after qualify — contract not found. "
+            f"Check exchange/trading_class in YAML. "
+            f"For SPX weeklies set trading_class: SPXW; for monthlies: SPX."
+        )
+    return None
+
+
 # ── market data ───────────────────────────────────────────────────────────────
 
-def _fetch_marks(ib, contracts: list) -> list[dict]:
+def _fetch_marks(ib, qualified: list[tuple]) -> list[dict]:
     """
-    Batch-request market data for all contracts. One POLL_SECS wait covers all.
-    Returns list[{mark, delta, gamma, theta, vega}] aligned with contracts.
+    Batch-request market data for all qualified contracts.
+    qualified: list of (contract, error_str_or_None)
+    Returns list[{mark, delta, gamma, theta, vega, error}] aligned with input.
+
+    Only requests data for contracts that qualified successfully (conId > 0).
+    One POLL_SECS wait covers the entire batch — much faster than sequential.
+    ib.positions() is not called anywhere in this function.
     """
-    tickers = [
-        ib.reqMktData(c, genericTickList="", snapshot=False, regulatorySnapshot=False)
-        for c in contracts
-    ]
+    # Subscribe only qualified contracts
+    tickers: dict[int, object] = {}   # index → Ticker
+    for i, (contract, err) in enumerate(qualified):
+        if err is None:
+            tickers[i] = ib.reqMktData(
+                contract, genericTickList="", snapshot=False, regulatorySnapshot=False
+            )
+
     ib.sleep(POLL_SECS)
 
     results = []
-    for contract, ticker in zip(contracts, tickers):
+    for i, (contract, err) in enumerate(qualified):
+        if err is not None:
+            results.append({"mark": None, "delta": None, "gamma": None,
+                            "theta": None, "vega": None, "error": err})
+            continue
+
         ib.cancelMktData(contract)
+        ticker = tickers[i]
 
         bid  = ticker.bid  if ticker.bid  and math.isfinite(ticker.bid)  and ticker.bid  > 0 else None
         ask  = ticker.ask  if ticker.ask  and math.isfinite(ticker.ask)  and ticker.ask  > 0 else None
         last = ticker.last if ticker.last and math.isfinite(ticker.last) and ticker.last > 0 else None
 
-        g = ticker.modelGreeks
+        g        = ticker.modelGreeks
         model_px = g.optPrice if g and g.optPrice is not None and math.isfinite(g.optPrice) else None
 
         if bid and ask:
@@ -137,14 +193,77 @@ def _fetch_marks(ib, contracts: list) -> list[dict]:
             "gamma": _greek("gamma"),
             "theta": _greek("theta"),
             "vega":  _greek("vega"),
+            "error": None if mark is not None else "no market data (market closed?)",
         })
 
     return results
 
 
-# ── display ───────────────────────────────────────────────────────────────────
+# ── P&L and greek aggregation ─────────────────────────────────────────────────
 
-_W = 95   # table width
+def _aggregate(combo: dict, market: list[dict]) -> tuple[list[dict], dict, bool, bool]:
+    """
+    Pure function — no TWS calls. Aggregates P&L and greeks from YAML fills + live marks.
+    Returns (legs_out, total, any_partial, any_error).
+    """
+    legs_out: list[dict] = []
+    total_pnl = total_delta = total_gamma = total_theta = total_vega = 0.0
+    any_partial = any_error = False
+
+    for i, leg in enumerate(combo["legs"]):
+        qty  = int(leg["qty"])
+        fill = float(leg["fill"])
+        mult = float(leg.get("multiplier", 100))
+        mk   = market[i] if i < len(market) else {}
+        mark = mk.get("mark")
+        err  = mk.get("error")
+
+        pnl = (mark - fill) * qty * mult if mark is not None else None
+        if pnl is not None:
+            total_pnl += pnl
+        else:
+            any_partial = True
+        if err:
+            any_error = True
+
+        # Position greek = contract greek × signed qty
+        def pos(key, q=qty):
+            v = mk.get(key)
+            return v * q if v is not None else None
+
+        pd, pg, pt, pv = pos("delta"), pos("gamma"), pos("theta"), pos("vega")
+        if pd is not None: total_delta += pd
+        if pg is not None: total_gamma += pg
+        if pt is not None: total_theta += pt
+        if pv is not None: total_vega  += pv
+
+        exp_label = _exp_label(leg["expiry"])
+        legs_out.append({
+            "label": f"{leg['symbol']} {leg['strike']}{leg['right'].upper()} {exp_label}",
+            "qty":   qty,
+            "fill":  fill,
+            "mark":  round(mark, 2) if mark is not None else None,
+            "pnl":   round(pnl,  0) if pnl  is not None else None,
+            "delta": round(pd,   3) if pd    is not None else None,
+            "gamma": round(pg,   4) if pg    is not None else None,
+            "theta": round(pt,   3) if pt    is not None else None,
+            "vega":  round(pv,   3) if pv    is not None else None,
+            "error": err,
+        })
+
+    total = {
+        "pnl":   round(total_pnl,   0),
+        "delta": round(total_delta,  3),
+        "gamma": round(total_gamma,  4),
+        "theta": round(total_theta,  3),
+        "vega":  round(total_vega,   3),
+    }
+    return legs_out, total, any_partial, any_error
+
+
+# ── display helpers ───────────────────────────────────────────────────────────
+
+_W = 95
 
 def _dte(expiry_iso: str) -> int:
     try:
@@ -165,13 +284,12 @@ def _fmt_greek(v: float | None, fmt: str = "+.3f") -> str:
 
 
 def _print_combo(combo: dict, market: list[dict]) -> None:
-    legs = combo["legs"]
-    name = combo["name"]
-    dte  = _dte(legs[0]["expiry"]) if legs else -1
-    dte_str = f"DTE: {dte}" if dte >= 0 else "DTE: ?"
+    legs      = combo["legs"]
+    dte_str   = f"DTE: {_dte(legs[0]['expiry'])}" if legs else "DTE: ?"
+    legs_out, total, any_partial, any_error = _aggregate(combo, market)
 
     print("═" * _W)
-    print(f"  {name:<70} {dte_str:>10}")
+    print(f"  {combo['name']:<70} {dte_str:>10}")
     print("─" * _W)
     print(
         f"  {'Leg':<24} {'Qty':>4}  {'Fill':>7}  {'Mark':>7}  {'P&L':>9}"
@@ -179,68 +297,67 @@ def _print_combo(combo: dict, market: list[dict]) -> None:
     )
     print("─" * _W)
 
-    total_pnl = total_delta = total_gamma = total_theta = total_vega = 0.0
-    any_missing = False
-    greek_complete = True
-
-    for i, leg in enumerate(legs):
-        qty  = int(leg["qty"])
-        fill = float(leg["fill"])
-        mult = float(leg.get("multiplier", 100))
-        mk   = market[i] if i < len(market) else {}
-        mark = mk.get("mark")
-
-        # P&L: (mark - fill) × qty × multiplier
-        if mark is not None:
-            pnl = (mark - fill) * qty * mult
-            pnl_str = f"${pnl:>+9.0f}"
-            total_pnl += pnl
-        else:
-            pnl_str = "        ?"
-            any_missing = True
-
-        # Position greeks = contract greek × qty
-        def pos(key):
-            v = mk.get(key)
-            return v * qty if v is not None else None
-
-        pd, pg, pt, pv = pos("delta"), pos("gamma"), pos("theta"), pos("vega")
-        if pd is not None: total_delta += pd
-        if pg is not None: total_gamma += pg
-        if pt is not None: total_theta += pt
-        if pv is not None: total_vega  += pv
-        if None in (pd, pg, pt, pv): greek_complete = False
-
-        leg_label = (
-            f"{leg['symbol']} {leg['strike']}{leg['right'].upper()} {_exp_label(leg['expiry'])}"
-        )
-        mark_str = f"${mark:>6.2f}" if mark is not None else "      ?"
-
+    for lo in legs_out:
+        mark_str = f"${lo['mark']:>6.2f}" if lo["mark"] is not None else "      ?"
+        pnl_str  = f"${lo['pnl']:>+9.0f}" if lo["pnl"] is not None else "        ?"
+        err_tag  = f"  ← {lo['error']}" if lo["error"] else ""
         print(
-            f"  {leg_label:<24} {qty:>+4}  ${fill:>6.2f}  {mark_str}  {pnl_str}"
-            f"  {_fmt_greek(pd):>7}  {_fmt_greek(pg, '.4f'):>7}"
-            f"  {_fmt_greek(pt):>7}  {_fmt_greek(pv):>7}"
+            f"  {lo['label']:<24} {lo['qty']:>+4}  ${lo['fill']:>6.2f}  {mark_str}  {pnl_str}"
+            f"  {_fmt_greek(lo['delta']):>7}  {_fmt_greek(lo['gamma'], '.4f'):>7}"
+            f"  {_fmt_greek(lo['theta']):>7}  {_fmt_greek(lo['vega']):>7}{err_tag}"
         )
 
+    t = total
     print("─" * _W)
-    pnl_total = f"${total_pnl:>+9.0f}" + ("*" if any_missing else " ")
-    g_flag = "" if greek_complete else "*"
+    pnl_total = f"${t['pnl']:>+9.0f}" + ("*" if any_partial else " ")
     print(
         f"  {'TOTAL':<24} {'':>4}  {'':>7}  {'':>7}  {pnl_total}"
-        f"  {total_delta:>+7.3f}  {total_gamma:>7.4f}"
-        f"  {total_theta:>+7.3f}  {total_vega:>+7.3f}{g_flag}"
+        f"  {t['delta']:>+7.3f}  {t['gamma']:>7.4f}  {t['theta']:>+7.3f}  {t['vega']:>+7.3f}"
     )
-    if any_missing:
-        print("  * Mark unavailable for ≥1 leg — P&L is partial")
-    if not greek_complete:
-        print("  * Greeks unavailable for ≥1 leg — totals are partial")
+    if any_error:
+        print("  * One or more legs failed — check error messages above")
     print()
+
+
+# ── shared TWS fetch logic ────────────────────────────────────────────────────
+
+def _build_and_fetch(ib, combos: list[dict]) -> list[list[dict]]:
+    """
+    Qualify all legs from all combos, then batch-fetch market data.
+    Returns list[list[dict]] — market data per combo, per leg.
+    Never calls ib.positions().
+    """
+    # Build contracts from YAML legs
+    all_qualified: list[list[tuple]] = []   # [combo_idx][leg_idx] = (contract, err)
+    for combo in combos:
+        leg_qualified = []
+        for leg in combo["legs"]:
+            contract = _make_contract(leg)
+            label    = f"{leg['symbol']} {leg['strike']}{leg['right'].upper()} {leg['expiry']}"
+            err      = _qualify_leg(ib, contract, label)
+            if err:
+                print(f"  WARNING [{combo['name']}] {label}: {err}")
+            leg_qualified.append((contract, err))
+        all_qualified.append(leg_qualified)
+
+    # Flatten and batch-fetch all qualified contracts in one pass
+    flat_qualified = [item for legs in all_qualified for item in legs]
+    flat_market    = _fetch_marks(ib, flat_qualified)
+
+    # Re-slice per combo
+    result: list[list[dict]] = []
+    idx = 0
+    for leg_qualified in all_qualified:
+        n = len(leg_qualified)
+        result.append(flat_market[idx : idx + n])
+        idx += n
+    return result
 
 
 # ── dashboard API ─────────────────────────────────────────────────────────────
 
 def get_combo_data(combo_filter: str | None = None) -> dict:
-    """Return structured combo data for the web dashboard."""
+    """Structured combo data for the web dashboard. Never calls ib.positions()."""
     try:
         combos = _load_combos(combo_filter)
     except FileNotFoundError as e:
@@ -254,83 +371,19 @@ def get_combo_data(combo_filter: str | None = None) -> dict:
         return {"ok": False, "error": "Could not connect to TWS"}
 
     try:
-        all_contracts: list[list] = []
-        for combo in combos:
-            leg_contracts = [_make_contract(leg) for leg in combo["legs"]]
-            try:
-                ib.qualifyContracts(*leg_contracts)
-            except Exception:
-                pass
-            all_contracts.append(leg_contracts)
-
-        flat_contracts = [c for leg_cs in all_contracts for c in leg_cs]
-        flat_market    = _fetch_marks(ib, flat_contracts)
+        all_market = _build_and_fetch(ib, combos)
 
         result_combos = []
-        idx = 0
-        for combo, leg_contracts in zip(combos, all_contracts):
-            n      = len(leg_contracts)
-            market = flat_market[idx : idx + n]
-            idx   += n
-
-            legs_out: list[dict] = []
-            total_pnl = total_delta = total_gamma = total_theta = total_vega = 0.0
-            partial = greek_partial = False
-
-            for i, leg in enumerate(combo["legs"]):
-                qty  = int(leg["qty"])
-                fill = float(leg["fill"])
-                mult = float(leg.get("multiplier", 100))
-                mk   = market[i] if i < len(market) else {}
-                mark = mk.get("mark")
-
-                pnl = (mark - fill) * qty * mult if mark is not None else None
-                if pnl is not None:
-                    total_pnl += pnl
-                else:
-                    partial = True
-
-                def pos(key):
-                    v = mk.get(key)
-                    return v * qty if v is not None else None
-
-                pd, pg, pt, pv = pos("delta"), pos("gamma"), pos("theta"), pos("vega")
-                if pd is not None: total_delta += pd
-                if pg is not None: total_gamma += pg
-                if pt is not None: total_theta += pt
-                if pv is not None: total_vega  += pv
-                if None in (pd, pg, pt, pv): greek_partial = True
-
-                label = (
-                    f"{leg['symbol']} {leg['strike']}{leg['right'].upper()}"
-                    f" {_exp_label(leg['expiry'])}"
-                )
-                legs_out.append({
-                    "label": label,
-                    "qty":   qty,
-                    "fill":  fill,
-                    "mark":  round(mark, 2) if mark is not None else None,
-                    "pnl":   round(pnl,  0) if pnl  is not None else None,
-                    "delta": round(pd,   3) if pd    is not None else None,
-                    "gamma": round(pg,   4) if pg    is not None else None,
-                    "theta": round(pt,   3) if pt    is not None else None,
-                    "vega":  round(pv,   3) if pv    is not None else None,
-                })
-
+        for combo, market in zip(combos, all_market):
+            legs_out, total, any_partial, any_error = _aggregate(combo, market)
             dte = _dte(combo["legs"][0]["expiry"]) if combo["legs"] else -1
             result_combos.append({
-                "name": combo["name"],
-                "dte":  dte,
-                "legs": legs_out,
-                "total": {
-                    "pnl":   round(total_pnl,   0),
-                    "delta": round(total_delta,  3),
-                    "gamma": round(total_gamma,  4),
-                    "theta": round(total_theta,  3),
-                    "vega":  round(total_vega,   3),
-                },
-                "partial":      partial,
-                "greek_partial": greek_partial,
+                "name":         combo["name"],
+                "dte":          dte,
+                "legs":         legs_out,
+                "total":        total,
+                "partial":      any_partial,
+                "has_error":    any_error,
             })
 
         return {"ok": True, "combos": result_combos}
@@ -341,7 +394,7 @@ def get_combo_data(combo_filter: str | None = None) -> dict:
             pass
 
 
-# ── main ──────────────────────────────────────────────────────────────────────
+# ── CLI entry point ───────────────────────────────────────────────────────────
 
 def run(combo_filter: str | None = None, watch_interval: int | None = None) -> None:
     combos = _load_combos(combo_filter)
@@ -355,35 +408,15 @@ def run(combo_filter: str | None = None, watch_interval: int | None = None) -> N
         return
 
     try:
-        # Build and qualify all contracts once — reused across watch iterations
-        all_contracts: list[list] = []
-        for combo in combos:
-            leg_contracts = [_make_contract(leg) for leg in combo["legs"]]
-            try:
-                ib.qualifyContracts(*leg_contracts)
-            except Exception as e:
-                print(f"  WARNING: could not qualify some legs in '{combo['name']}': {e}")
-            all_contracts.append(leg_contracts)
-
         while True:
             ts = datetime.now(ET).strftime("%Y-%m-%d %H:%M:%S ET")
             print(f"\n  Live as of {ts}\n")
-
-            # One batch fetch covers all combos — single POLL_SECS wait
-            flat_contracts = [c for leg_cs in all_contracts for c in leg_cs]
-            flat_market    = _fetch_marks(ib, flat_contracts)
-
-            # Re-slice per combo
-            idx = 0
-            for combo, leg_contracts in zip(combos, all_contracts):
-                n = len(leg_contracts)
-                _print_combo(combo, flat_market[idx : idx + n])
-                idx += n
-
+            all_market = _build_and_fetch(ib, combos)
+            for combo, market in zip(combos, all_market):
+                _print_combo(combo, market)
             if watch_interval is None:
                 break
             time.sleep(watch_interval)
-
     except KeyboardInterrupt:
         pass
     finally:
@@ -395,13 +428,9 @@ def run(combo_filter: str | None = None, watch_interval: int | None = None) -> N
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Manual options combo tracker")
-    parser.add_argument(
-        "--watch", type=int, default=None, metavar="N",
-        help="Refresh every N seconds (default: run once)",
-    )
-    parser.add_argument(
-        "--combo", type=str, default=None,
-        help="Filter to combos whose name contains this string (case-insensitive)",
-    )
+    parser.add_argument("--watch", type=int, default=None, metavar="N",
+                        help="Refresh every N seconds (default: run once)")
+    parser.add_argument("--combo", type=str, default=None,
+                        help="Filter to combos whose name contains this string")
     args = parser.parse_args()
     run(combo_filter=args.combo, watch_interval=args.watch)

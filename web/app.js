@@ -377,21 +377,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 const dteBadge = combo.dte >= 0
                     ? `<span class="badge badge-hold" style="margin-left:8px">DTE ${combo.dte}</span>`
                     : '';
-                const partialNote = combo.partial
-                    ? '<span style="font-size:11px;color:var(--warning);margin-left:8px">* partial marks</span>' : '';
+                const partialNote = (combo.partial || combo.has_error)
+                    ? '<span style="font-size:11px;color:var(--warning);margin-left:8px">⚠ partial data</span>' : '';
 
-                const legRows = combo.legs.map(leg => `
-                    <tr>
+                const legRows = combo.legs.map(leg => {
+                    const errCell = leg.error
+                        ? `<td colspan="5" style="color:var(--warning);font-size:11px;padding-left:8px">⚠ ${leg.error}</td>`
+                        : `<td style="text-align:right;font-size:12px">${_fmtGreek(leg.delta)}</td>
+                           <td style="text-align:right;font-size:12px">${_fmtGreek(leg.gamma, false)}</td>
+                           <td style="text-align:right;font-size:12px">${_fmtGreek(leg.theta)}</td>
+                           <td style="text-align:right;font-size:12px">${_fmtGreek(leg.vega)}</td>`;
+                    return `<tr>
                         <td style="font-family:monospace;font-size:13px">${leg.label}</td>
                         <td style="text-align:center">${leg.qty >= 0 ? '+' : ''}${leg.qty}</td>
                         <td style="text-align:right">$${leg.fill.toFixed(2)}</td>
                         <td style="text-align:right">${leg.mark !== null ? '$'+leg.mark.toFixed(2) : '<span style="color:var(--text-muted)">—</span>'}</td>
                         <td style="text-align:right">${_fmtPnl(leg.pnl)}</td>
-                        <td style="text-align:right;font-size:12px">${_fmtGreek(leg.delta)}</td>
-                        <td style="text-align:right;font-size:12px">${_fmtGreek(leg.gamma, false)}</td>
-                        <td style="text-align:right;font-size:12px">${_fmtGreek(leg.theta)}</td>
-                        <td style="text-align:right;font-size:12px">${_fmtGreek(leg.vega)}</td>
-                    </tr>`).join('');
+                        ${errCell}
+                    </tr>`;
+                }).join('');
 
                 const t = combo.total;
                 return `
