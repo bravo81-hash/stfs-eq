@@ -1,1 +1,64 @@
-[]
+[
+  {
+    "name": "TZ.RUT.May 15/Jun 18",
+    "group": "TimeZone",
+    "legs": [
+      {
+        "conId": 866434721,
+        "qty": -2,
+        "costBasis": 0
+      },
+      {
+        "conId": 866434706,
+        "qty": 2,
+        "costBasis": 0
+      },
+      {
+        "conId": 866434873,
+        "qty": 1,
+        "costBasis": 0
+      },
+      {
+        "conId": 866434856,
+        "qty": -2,
+        "costBasis": 0
+      },
+      {
+        "conId": 874698879,
+        "qty": 1,
+        "costBasis": 0
+      }
+    ]
+  },
+  {
+    "name": "TZ.RUT.May 14/Jun 17",
+    "group": "TimeZone",
+    "legs": [
+      {
+        "conId": 856622297,
+        "qty": 4,
+        "costBasis": 0
+      },
+      {
+        "conId": 856622334,
+        "qty": -4,
+        "costBasis": 0
+      },
+      {
+        "conId": 856622663,
+        "qty": 2,
+        "costBasis": 0
+      },
+      {
+        "conId": 864954507,
+        "qty": 2,
+        "costBasis": 0
+      },
+      {
+        "conId": 856622625,
+        "qty": -4,
+        "costBasis": 0
+      }
+    ]
+  }
+]

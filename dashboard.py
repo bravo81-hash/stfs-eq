@@ -62,8 +62,8 @@ def api_generate():
     regime = data.get("regime", "AUTO")
     
     try:
-        # We pass --no-open so it doesn't try to open the browser tab from the script
-        cmd = ["python3.11", "battle_card.py", regime, "--no-open"]
+        import sys
+        cmd = [sys.executable, "battle_card.py", regime, "--no-open"]
         result = subprocess.run(cmd, capture_output=True, text=True)
         
         if result.returncode == 0:
@@ -140,7 +140,8 @@ def api_daemon_toggle():
     if action == "start":
         if _trailing_stop_process is None or _trailing_stop_process.poll() is not None:
             # Start the daemon
-            _trailing_stop_process = subprocess.Popen(["python3.11", "trailing_stop_manager.py"])
+            import sys
+            _trailing_stop_process = subprocess.Popen([sys.executable, "trailing_stop_manager.py"])
         return jsonify({"ok": True, "active": True})
     elif action == "stop":
         if _trailing_stop_process is not None:
@@ -202,8 +203,9 @@ def api_run_script():
     if script_name not in allowed_scripts:
         return jsonify({"ok": False, "error": "Unauthorized script"}), 403
         
+    import sys
     try:
-        cmd = ["python3.11", script_name] + [str(a) for a in args]
+        cmd = [sys.executable, script_name] + [str(a) for a in args]
         result = subprocess.run(cmd, capture_output=True, text=True)
         return jsonify({"ok": True, "stdout": result.stdout, "stderr": result.stderr, "code": result.returncode})
     except Exception as e:
@@ -230,8 +232,8 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Warning: TWS connection failed on startup: {e}")
 
-    # Auto-start trailing stop daemon
-    _trailing_stop_process = subprocess.Popen(["python3.11", "trailing_stop_manager.py"])
+    import sys
+    _trailing_stop_process = subprocess.Popen([sys.executable, "trailing_stop_manager.py"])
     print("  ✓ Trailing stop daemon started")
 
     print("=====================================================")

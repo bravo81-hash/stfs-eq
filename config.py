@@ -7,9 +7,9 @@ Edit this file only. Do not rename.
 # ACCOUNTS — add/remove/rename as needed
 # =====================================================================
 ACCOUNTS = [
-    {"name": "Borg",   "equity": 20_000, "risk_pct": 1.0, "max_notional_pct": 10.0},
-    {"name": "SMSF",   "equity": 50_000, "risk_pct": 1.0, "max_notional_pct": 10.0},
-    {"name": "Family", "equity": 50_000, "risk_pct": 1.0, "max_notional_pct": 10.0},
+    {"name": "Borg", "equity": 20000, "risk_pct": 1.0, "max_notional_pct": 10.0},
+    {"name": "SMSF", "equity": 50000, "risk_pct": 1.0, "max_notional_pct": 10.0},
+    {"name": "Family", "equity": 50000, "risk_pct": 1.0, "max_notional_pct": 10.0},
 ]
 
 # =====================================================================

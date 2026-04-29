@@ -141,7 +141,13 @@ FINNHUB_BASE = "https://finnhub.io/api/v1"
 def get_finnhub_key():
     k = os.environ.get("FINNHUB_API_KEY")
     if not k:
-        print("ERROR: FINNHUB_API_KEY not set. Run: export FINNHUB_API_KEY=\"your_key\"")
+        # Check for local file
+        key_file = Path(__file__).parent / ".api_key"
+        if key_file.exists():
+            k = key_file.read_text().strip()
+            
+    if not k:
+        print("ERROR: FINNHUB_API_KEY not set. Run: export FINNHUB_API_KEY=\"your_key\" or create a .api_key file.")
         sys.exit(1)
     return k
 
