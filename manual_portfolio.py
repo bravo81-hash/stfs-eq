@@ -237,6 +237,110 @@ def _print_combo(combo: dict, market: list[dict]) -> None:
     print()
 
 
+# ── dashboard API ─────────────────────────────────────────────────────────────
+
+def get_combo_data(combo_filter: str | None = None) -> dict:
+    """Return structured combo data for the web dashboard."""
+    try:
+        combos = _load_combos(combo_filter)
+    except FileNotFoundError as e:
+        return {"ok": False, "error": str(e)}
+
+    if not combos:
+        return {"ok": True, "combos": []}
+
+    ib = _connect()
+    if ib is None:
+        return {"ok": False, "error": "Could not connect to TWS"}
+
+    try:
+        all_contracts: list[list] = []
+        for combo in combos:
+            leg_contracts = [_make_contract(leg) for leg in combo["legs"]]
+            try:
+                ib.qualifyContracts(*leg_contracts)
+            except Exception:
+                pass
+            all_contracts.append(leg_contracts)
+
+        flat_contracts = [c for leg_cs in all_contracts for c in leg_cs]
+        flat_market    = _fetch_marks(ib, flat_contracts)
+
+        result_combos = []
+        idx = 0
+        for combo, leg_contracts in zip(combos, all_contracts):
+            n      = len(leg_contracts)
+            market = flat_market[idx : idx + n]
+            idx   += n
+
+            legs_out: list[dict] = []
+            total_pnl = total_delta = total_gamma = total_theta = total_vega = 0.0
+            partial = greek_partial = False
+
+            for i, leg in enumerate(combo["legs"]):
+                qty  = int(leg["qty"])
+                fill = float(leg["fill"])
+                mult = float(leg.get("multiplier", 100))
+                mk   = market[i] if i < len(market) else {}
+                mark = mk.get("mark")
+
+                pnl = (mark - fill) * qty * mult if mark is not None else None
+                if pnl is not None:
+                    total_pnl += pnl
+                else:
+                    partial = True
+
+                def pos(key):
+                    v = mk.get(key)
+                    return v * qty if v is not None else None
+
+                pd, pg, pt, pv = pos("delta"), pos("gamma"), pos("theta"), pos("vega")
+                if pd is not None: total_delta += pd
+                if pg is not None: total_gamma += pg
+                if pt is not None: total_theta += pt
+                if pv is not None: total_vega  += pv
+                if None in (pd, pg, pt, pv): greek_partial = True
+
+                label = (
+                    f"{leg['symbol']} {leg['strike']}{leg['right'].upper()}"
+                    f" {_exp_label(leg['expiry'])}"
+                )
+                legs_out.append({
+                    "label": label,
+                    "qty":   qty,
+                    "fill":  fill,
+                    "mark":  round(mark, 2) if mark is not None else None,
+                    "pnl":   round(pnl,  0) if pnl  is not None else None,
+                    "delta": round(pd,   3) if pd    is not None else None,
+                    "gamma": round(pg,   4) if pg    is not None else None,
+                    "theta": round(pt,   3) if pt    is not None else None,
+                    "vega":  round(pv,   3) if pv    is not None else None,
+                })
+
+            dte = _dte(combo["legs"][0]["expiry"]) if combo["legs"] else -1
+            result_combos.append({
+                "name": combo["name"],
+                "dte":  dte,
+                "legs": legs_out,
+                "total": {
+                    "pnl":   round(total_pnl,   0),
+                    "delta": round(total_delta,  3),
+                    "gamma": round(total_gamma,  4),
+                    "theta": round(total_theta,  3),
+                    "vega":  round(total_vega,   3),
+                },
+                "partial":      partial,
+                "greek_partial": greek_partial,
+            })
+
+        return {"ok": True, "combos": result_combos}
+    finally:
+        try:
+            ib.disconnect()
+        except Exception:
+            pass
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def run(combo_filter: str | None = None, watch_interval: int | None = None) -> None:

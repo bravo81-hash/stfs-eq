@@ -27,6 +27,10 @@
                 <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 13v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2m18 0v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6m18 0H3m6-6v2m6-2v2"></path></svg>
                 Portfolio
             </li>
+            <li data-tab="combos">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h8M4 18h8"></path></svg>
+                Combos
+            </li>
             <li data-tab="analytics">
                 <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
                 Analytics
@@ -132,6 +136,23 @@
                         <tr class="empty-row"><td colspan="7">Loading portfolio data...</td></tr>
                     </tbody>
                 </table>
+            </div>
+        </section>
+
+        <!-- Combos Tab -->
+        <section id="combos" class="tab-content">
+            <div class="portfolio-header glass-panel">
+                <div class="ph-left">
+                    <h2>Manual Combos</h2>
+                    <p>SPX / RUT / ES discretionary positions. Cost basis from manual_combos.yaml — never from TWS.</p>
+                </div>
+                <button id="btn-refresh-combos" class="secondary-btn">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    Refresh
+                </button>
+            </div>
+            <div id="combos-container">
+                <!-- Populated by JS: one card per combo -->
             </div>
         </section>
 

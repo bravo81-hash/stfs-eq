@@ -16,9 +16,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // Update title
             pageTitle.textContent = tab.textContent.trim();
 
-            if (target === 'portfolio') {
-                fetchPortfolio();
-            }
+            if (target === 'portfolio') fetchPortfolio();
+            if (target === 'combos')    fetchCombos();
         });
     });
 
@@ -263,7 +262,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderAccounts(accounts) {
         if(!accountsContainer) return;
         accountsContainer.innerHTML = '';
-        accounts.forEach((acc, i) => {
+        accounts.forEach((acc) => {
             const div = document.createElement('div');
             div.style.display = 'flex';
             div.style.gap = '16px';
@@ -340,6 +339,103 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // ── Manual Combos Tab ──
+    const btnRefreshCombos = document.getElementById('btn-refresh-combos');
+    const combosContainer  = document.getElementById('combos-container');
+
+    function _fmtGreek(v, signed = true) {
+        if (v === null || v === undefined) return '<span style="color:var(--text-muted)">?</span>';
+        const s = signed ? (v >= 0 ? '+' : '') : '';
+        return s + v;
+    }
+
+    function _fmtPnl(v) {
+        if (v === null || v === undefined) return '<span style="color:var(--text-muted)">?</span>';
+        const color = v >= 0 ? 'var(--success)' : 'var(--danger)';
+        return `<span style="color:${color};font-weight:600">${v >= 0 ? '+' : ''}$${Math.abs(v).toLocaleString()}</span>`;
+    }
+
+    async function fetchCombos() {
+        if (!combosContainer) return;
+        combosContainer.innerHTML = '<div class="glass-panel" style="padding:40px;text-align:center;color:var(--text-muted)">Loading combo data from TWS…</div>';
+
+        try {
+            const res  = await fetch('/api/manual_portfolio');
+            const data = await res.json();
+
+            if (!data.ok) {
+                combosContainer.innerHTML = `<div class="glass-panel" style="padding:40px;text-align:center;color:var(--danger)">Error: ${data.error}</div>`;
+                return;
+            }
+            if (data.combos.length === 0) {
+                combosContainer.innerHTML = '<div class="glass-panel" style="padding:40px;text-align:center;color:var(--text-muted)">No combos defined in manual_combos.yaml.</div>';
+                return;
+            }
+
+            combosContainer.innerHTML = data.combos.map(combo => {
+                const dteBadge = combo.dte >= 0
+                    ? `<span class="badge badge-hold" style="margin-left:8px">DTE ${combo.dte}</span>`
+                    : '';
+                const partialNote = combo.partial
+                    ? '<span style="font-size:11px;color:var(--warning);margin-left:8px">* partial marks</span>' : '';
+
+                const legRows = combo.legs.map(leg => `
+                    <tr>
+                        <td style="font-family:monospace;font-size:13px">${leg.label}</td>
+                        <td style="text-align:center">${leg.qty >= 0 ? '+' : ''}${leg.qty}</td>
+                        <td style="text-align:right">$${leg.fill.toFixed(2)}</td>
+                        <td style="text-align:right">${leg.mark !== null ? '$'+leg.mark.toFixed(2) : '<span style="color:var(--text-muted)">—</span>'}</td>
+                        <td style="text-align:right">${_fmtPnl(leg.pnl)}</td>
+                        <td style="text-align:right;font-size:12px">${_fmtGreek(leg.delta)}</td>
+                        <td style="text-align:right;font-size:12px">${_fmtGreek(leg.gamma, false)}</td>
+                        <td style="text-align:right;font-size:12px">${_fmtGreek(leg.theta)}</td>
+                        <td style="text-align:right;font-size:12px">${_fmtGreek(leg.vega)}</td>
+                    </tr>`).join('');
+
+                const t = combo.total;
+                return `
+                <div class="glass-panel" style="padding:20px;margin-bottom:16px">
+                    <div style="display:flex;align-items:center;margin-bottom:14px;gap:8px">
+                        <h3 style="font-size:16px;font-weight:600;margin:0">${combo.name}</h3>
+                        ${dteBadge}
+                        <span style="flex:1"></span>
+                        ${partialNote}
+                        <span style="font-size:20px;font-weight:700">${_fmtPnl(t.pnl)}</span>
+                    </div>
+                    <div class="table-container" style="padding:0;background:transparent;border:none">
+                        <table style="width:100%">
+                            <thead>
+                                <tr>
+                                    <th>Leg</th><th style="text-align:center">Qty</th>
+                                    <th style="text-align:right">Fill</th><th style="text-align:right">Mark</th>
+                                    <th style="text-align:right">P&L</th><th style="text-align:right">Delta</th>
+                                    <th style="text-align:right">Gamma</th><th style="text-align:right">Theta</th>
+                                    <th style="text-align:right">Vega</th>
+                                </tr>
+                            </thead>
+                            <tbody>${legRows}</tbody>
+                            <tfoot>
+                                <tr style="border-top:1px solid var(--border-color);font-weight:600">
+                                    <td colspan="4" style="color:var(--text-muted);font-size:12px;padding-top:8px">TOTAL</td>
+                                    <td style="text-align:right;padding-top:8px">${_fmtPnl(t.pnl)}</td>
+                                    <td style="text-align:right;font-size:12px;padding-top:8px">${_fmtGreek(t.delta)}</td>
+                                    <td style="text-align:right;font-size:12px;padding-top:8px">${_fmtGreek(t.gamma, false)}</td>
+                                    <td style="text-align:right;font-size:12px;padding-top:8px">${_fmtGreek(t.theta)}</td>
+                                    <td style="text-align:right;font-size:12px;padding-top:8px">${_fmtGreek(t.vega)}</td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>`;
+            }).join('');
+
+        } catch (e) {
+            combosContainer.innerHTML = `<div class="glass-panel" style="padding:40px;text-align:center;color:var(--danger)">Failed to fetch: ${e}</div>`;
+        }
+    }
+
+    if (btnRefreshCombos) btnRefreshCombos.addEventListener('click', fetchCombos);
 
     // Load accounts initially
     loadAccounts();

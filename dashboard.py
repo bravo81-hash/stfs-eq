@@ -15,6 +15,7 @@ from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory
 
 import config as C
+import manual_portfolio
 import order_server
 import portfolio_manager
 
@@ -83,6 +84,7 @@ def api_generate():
 # ── API: Portfolio Manager ────────────────────────────────────────────────────
 
 _portfolio_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+_combos_executor    = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 @app.route("/api/portfolio", methods=["GET"])
 def api_portfolio():
@@ -91,6 +93,14 @@ def api_portfolio():
         return jsonify(future.result(timeout=60))
     except concurrent.futures.TimeoutError:
         return jsonify({"ok": False, "error": "Portfolio fetch timed out"}), 504
+
+@app.route("/api/manual_portfolio", methods=["GET"])
+def api_manual_portfolio():
+    future = _combos_executor.submit(manual_portfolio.get_combo_data)
+    try:
+        return jsonify(future.result(timeout=60))
+    except concurrent.futures.TimeoutError:
+        return jsonify({"ok": False, "error": "Combo fetch timed out"}), 504
 
 # ── API: Trailing Stop Daemon Control ─────────────────────────────────────────
 
