@@ -150,6 +150,10 @@
                     <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
                     Refresh
                 </button>
+                <button id="btn-create-combo" class="primary-btn" style="margin-left: 12px;">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path></svg>
+                    Create Combo
+                </button>
             </div>
             <div id="combos-container">
                 <!-- Populated by JS: one card per combo -->
@@ -223,6 +227,50 @@
         </section>
 
     </main>
+
+    <!-- Create Combo Modal -->
+    <style>
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.7); z-index: 1000;
+            display: flex; justify-content: center; align-items: center;
+        }
+        .modal-overlay.hidden { display: none; }
+        .modal-content { max-height: 90vh; display: flex; flex-direction: column; }
+    </style>
+    <div id="combo-modal" class="modal-overlay hidden">
+        <div class="modal-content glass-panel" style="width: 800px; max-width: 90vw;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px;">
+                <h2 style="margin:0;">Create Manual Combo</h2>
+                <button id="btn-close-modal" style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:24px;">&times;</button>
+            </div>
+            
+            <div style="display:flex; gap:16px; margin-bottom: 20px;">
+                <div class="form-group" style="flex:2;">
+                    <label>Combo Name</label>
+                    <input type="text" id="combo-name" placeholder="e.g. SPX MAY CALENDAR" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: white; padding: 10px; border-radius: 8px; width: 100%; box-sizing: border-box;">
+                </div>
+                <div class="form-group" style="flex:1;">
+                    <label>Group</label>
+                    <input type="text" id="combo-group" placeholder="e.g. TimeEdge" value="Default" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: white; padding: 10px; border-radius: 8px; width: 100%; box-sizing: border-box;">
+                </div>
+            </div>
+
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
+                <div style="font-weight: 600;">Select Legs (Live TWS Positions)</div>
+                <input type="text" id="leg-search" placeholder="Search Ticker, Strike, Expiry..." style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: white; padding: 6px 12px; border-radius: 6px; width: 250px;">
+            </div>
+            <div id="raw-positions-container" style="max-height: 400px; overflow-y: auto; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; margin-bottom: 20px;">
+                <!-- Populated by JS -->
+                <div style="color:var(--text-muted); text-align:center; padding:20px;">Loading positions...</div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 12px;">
+                <button id="btn-cancel-combo" class="secondary-btn">Cancel</button>
+                <button id="btn-save-combo" class="primary-btn">Save Combo</button>
+            </div>
+        </div>
+    </div>
 
     <script src="app.js"></script>
 </body>

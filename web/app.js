@@ -353,7 +353,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function _fmtPnl(v) {
         if (v === null || v === undefined) return '<span style="color:var(--text-muted)">?</span>';
         const color = v >= 0 ? 'var(--success)' : 'var(--danger)';
-        return `<span style="color:${color};font-weight:600">${v >= 0 ? '+' : ''}$${Math.abs(v).toLocaleString()}</span>`;
+        const sign = v >= 0 ? '+' : '-';
+        return `<span style="color:${color};font-weight:600">${sign}$${Math.abs(v).toLocaleString()}</span>`;
     }
 
     async function fetchCombos() {
@@ -361,7 +362,7 @@ document.addEventListener('DOMContentLoaded', () => {
         combosContainer.innerHTML = '<div class="glass-panel" style="padding:40px;text-align:center;color:var(--text-muted)">Loading combo data from TWS…</div>';
 
         try {
-            const res  = await fetch('/api/manual_portfolio');
+            const res  = await fetch('/api/manual_combos');
             const data = await res.json();
 
             if (!data.ok) {
@@ -369,77 +370,240 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             if (data.combos.length === 0) {
-                combosContainer.innerHTML = '<div class="glass-panel" style="padding:40px;text-align:center;color:var(--text-muted)">No combos defined in manual_combos.yaml.</div>';
+                combosContainer.innerHTML = '<div class="glass-panel" style="padding:40px;text-align:center;color:var(--text-muted)">No combos defined in manual_combos.json.</div>';
                 return;
             }
 
-            combosContainer.innerHTML = data.combos.map(combo => {
-                const dteBadge = combo.dte >= 0
-                    ? `<span class="badge badge-hold" style="margin-left:8px">DTE ${combo.dte}</span>`
-                    : '';
-                const partialNote = (combo.partial || combo.has_error)
-                    ? '<span style="font-size:11px;color:var(--warning);margin-left:8px">⚠ partial data</span>' : '';
+            const grouped = {};
+            data.combos.forEach(c => {
+                const g = c.group || 'Default';
+                if(!grouped[g]) grouped[g] = [];
+                grouped[g].push(c);
+            });
 
-                const legRows = combo.legs.map(leg => {
-                    const errCell = leg.error
-                        ? `<td colspan="5" style="color:var(--warning);font-size:11px;padding-left:8px">⚠ ${leg.error}</td>`
-                        : `<td style="text-align:right;font-size:12px">${_fmtGreek(leg.delta)}</td>
-                           <td style="text-align:right;font-size:12px">${_fmtGreek(leg.gamma, false)}</td>
-                           <td style="text-align:right;font-size:12px">${_fmtGreek(leg.theta)}</td>
-                           <td style="text-align:right;font-size:12px">${_fmtGreek(leg.vega)}</td>`;
-                    return `<tr>
-                        <td style="font-family:monospace;font-size:13px">${leg.label}</td>
-                        <td style="text-align:center">${leg.qty >= 0 ? '+' : ''}${leg.qty}</td>
-                        <td style="text-align:right">$${leg.fill.toFixed(2)}</td>
-                        <td style="text-align:right">${leg.mark !== null ? '$'+leg.mark.toFixed(2) : '<span style="color:var(--text-muted)">—</span>'}</td>
-                        <td style="text-align:right">${_fmtPnl(leg.pnl)}</td>
-                        ${errCell}
-                    </tr>`;
+            let finalHtml = '';
+            for (const [groupName, groupCombos] of Object.entries(grouped)) {
+                finalHtml += `<div style="margin-bottom:32px;">`;
+                finalHtml += `<h2 style="font-size:18px; margin-bottom:16px; color:var(--text-muted); border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px;">${groupName}</h2>`;
+                finalHtml += groupCombos.map(combo => {
+                    const dteBadge = combo.dte >= 0
+                        ? `<span class="badge badge-hold" style="margin-left:8px">DTE ${combo.dte}</span>`
+                        : '';
+                    const partialNote = (combo.partial || combo.has_error)
+                        ? '<span style="font-size:11px;color:var(--warning);margin-left:8px">⚠ partial data</span>' : '';
+
+                    const legRows = combo.legs.map(leg => {
+                        const errCell = leg.error
+                            ? `<td colspan="5" style="color:var(--warning);font-size:11px;padding-left:8px">⚠ ${leg.error}</td>`
+                            : `<td style="text-align:right;font-size:12px">${_fmtGreek(leg.delta)}</td>
+                               <td style="text-align:right;font-size:12px">${_fmtGreek(leg.gamma, false)}</td>
+                               <td style="text-align:right;font-size:12px">${_fmtGreek(leg.theta)}</td>
+                               <td style="text-align:right;font-size:12px">${_fmtGreek(leg.vega)}</td>`;
+                        return `<tr>
+                            <td style="font-family:monospace;font-size:13px">${leg.label}</td>
+                            <td style="text-align:center">${leg.qty >= 0 ? '+' : ''}${leg.qty}</td>
+                            <td style="text-align:right">$${leg.fill.toFixed(2)}</td>
+                            <td style="text-align:right">${leg.mark !== null ? '$'+leg.mark.toFixed(2) : '<span style="color:var(--text-muted)">—</span>'}</td>
+                            <td style="text-align:right">${_fmtPnl(leg.pnl)}</td>
+                            ${errCell}
+                        </tr>`;
+                    }).join('');
+
+                    const t = combo.total;
+                    return `
+                    <div class="glass-panel" style="padding:20px;margin-bottom:16px">
+                        <div style="display:flex;align-items:center;gap:8px;cursor:pointer;" onclick="const t = this.nextElementSibling; const i = this.querySelector('.chevron-icon'); if(t.style.display==='none'){t.style.display='block';i.style.transform='rotate(180deg)';}else{t.style.display='none';i.style.transform='rotate(0deg)';}">
+                            <svg class="chevron-icon" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="transition: transform 0.2s; transform: rotate(0deg);"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path></svg>
+                            <h3 style="font-size:16px;font-weight:600;margin:0">${combo.name}</h3>
+                            ${dteBadge}
+                            <span style="flex:1"></span>
+                            <div style="display:flex; gap:16px; font-size:12px; color:var(--text-muted); background: rgba(0,0,0,0.2); padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border-color);">
+                                <span style="min-width:60px"><strong style="color:white; font-weight:600">Δ</strong> ${_fmtGreek(t.delta)}</span>
+                                <span style="min-width:60px"><strong style="color:white; font-weight:600">Γ</strong> ${_fmtGreek(t.gamma, false)}</span>
+                                <span style="min-width:60px"><strong style="color:white; font-weight:600">Θ</strong> ${_fmtGreek(t.theta)}</span>
+                                <span style="min-width:60px"><strong style="color:white; font-weight:600">V</strong> ${_fmtGreek(t.vega)}</span>
+                            </div>
+                            ${partialNote}
+                            <span style="font-size:20px;font-weight:700; width:120px; text-align:right;">${_fmtPnl(t.pnl)}</span>
+                        </div>
+                        <div class="table-container" style="padding:0;background:transparent;border:none; margin-top:14px; display:none;">
+                            <table style="width:100%">
+                                <thead>
+                                    <tr>
+                                        <th>Leg</th><th style="text-align:center">Qty</th>
+                                        <th style="text-align:right">Fill</th><th style="text-align:right">Mark</th>
+                                        <th style="text-align:right">P&L</th><th style="text-align:right">Delta</th>
+                                        <th style="text-align:right">Gamma</th><th style="text-align:right">Theta</th>
+                                        <th style="text-align:right">Vega</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${legRows}</tbody>
+                                <tfoot>
+                                    <tr style="border-top:1px solid var(--border-color);font-weight:600">
+                                        <td colspan="4" style="color:var(--text-muted);font-size:12px;padding-top:8px">TOTAL</td>
+                                        <td style="text-align:right;padding-top:8px">${_fmtPnl(t.pnl)}</td>
+                                        <td style="text-align:right;font-size:12px;padding-top:8px">${_fmtGreek(t.delta)}</td>
+                                        <td style="text-align:right;font-size:12px;padding-top:8px">${_fmtGreek(t.gamma, false)}</td>
+                                        <td style="text-align:right;font-size:12px;padding-top:8px">${_fmtGreek(t.theta)}</td>
+                                        <td style="text-align:right;font-size:12px;padding-top:8px">${_fmtGreek(t.vega)}</td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    </div>`;
                 }).join('');
-
-                const t = combo.total;
-                return `
-                <div class="glass-panel" style="padding:20px;margin-bottom:16px">
-                    <div style="display:flex;align-items:center;margin-bottom:14px;gap:8px">
-                        <h3 style="font-size:16px;font-weight:600;margin:0">${combo.name}</h3>
-                        ${dteBadge}
-                        <span style="flex:1"></span>
-                        ${partialNote}
-                        <span style="font-size:20px;font-weight:700">${_fmtPnl(t.pnl)}</span>
-                    </div>
-                    <div class="table-container" style="padding:0;background:transparent;border:none">
-                        <table style="width:100%">
-                            <thead>
-                                <tr>
-                                    <th>Leg</th><th style="text-align:center">Qty</th>
-                                    <th style="text-align:right">Fill</th><th style="text-align:right">Mark</th>
-                                    <th style="text-align:right">P&L</th><th style="text-align:right">Delta</th>
-                                    <th style="text-align:right">Gamma</th><th style="text-align:right">Theta</th>
-                                    <th style="text-align:right">Vega</th>
-                                </tr>
-                            </thead>
-                            <tbody>${legRows}</tbody>
-                            <tfoot>
-                                <tr style="border-top:1px solid var(--border-color);font-weight:600">
-                                    <td colspan="4" style="color:var(--text-muted);font-size:12px;padding-top:8px">TOTAL</td>
-                                    <td style="text-align:right;padding-top:8px">${_fmtPnl(t.pnl)}</td>
-                                    <td style="text-align:right;font-size:12px;padding-top:8px">${_fmtGreek(t.delta)}</td>
-                                    <td style="text-align:right;font-size:12px;padding-top:8px">${_fmtGreek(t.gamma, false)}</td>
-                                    <td style="text-align:right;font-size:12px;padding-top:8px">${_fmtGreek(t.theta)}</td>
-                                    <td style="text-align:right;font-size:12px;padding-top:8px">${_fmtGreek(t.vega)}</td>
-                                </tr>
-                            </tfoot>
-                        </table>
-                    </div>
-                </div>`;
-            }).join('');
+                finalHtml += `</div>`;
+            }
+            combosContainer.innerHTML = finalHtml;
 
         } catch (e) {
             combosContainer.innerHTML = `<div class="glass-panel" style="padding:40px;text-align:center;color:var(--danger)">Failed to fetch: ${e}</div>`;
         }
     }
 
+    const btnCreateCombo   = document.getElementById('btn-create-combo');
+    const comboModal       = document.getElementById('combo-modal');
+    const btnCloseModal    = document.getElementById('btn-close-modal');
+    const btnCancelCombo   = document.getElementById('btn-cancel-combo');
+    const btnSaveCombo     = document.getElementById('btn-save-combo');
+    const rawPosContainer  = document.getElementById('raw-positions-container');
+    const comboNameInput   = document.getElementById('combo-name');
+    const comboGroupInput  = document.getElementById('combo-group');
+    const legSearchInput   = document.getElementById('leg-search');
+
     if (btnRefreshCombos) btnRefreshCombos.addEventListener('click', fetchCombos);
+
+    // --- Modal Logic ---
+    function openModal() {
+        comboModal.classList.remove('hidden');
+        comboNameInput.value = '';
+        if(comboGroupInput) comboGroupInput.value = 'Default';
+        if(legSearchInput) legSearchInput.value = '';
+        rawPosContainer.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:20px;">Loading positions from TWS...</div>';
+        fetchRawPositions();
+    }
+
+    function closeModal() {
+        comboModal.classList.add('hidden');
+    }
+
+    if (btnCreateCombo) btnCreateCombo.addEventListener('click', openModal);
+    if (btnCloseModal) btnCloseModal.addEventListener('click', closeModal);
+    if (btnCancelCombo) btnCancelCombo.addEventListener('click', closeModal);
+
+    async function fetchRawPositions() {
+        try {
+            const res = await fetch('/api/raw_positions');
+            const data = await res.json();
+            
+            if (!data.ok) {
+                rawPosContainer.innerHTML = `<div style="color:var(--danger); padding:20px;">Error: ${data.error}</div>`;
+                return;
+            }
+            if (data.positions.length === 0) {
+                rawPosContainer.innerHTML = '<div style="color:var(--text-muted); padding:20px;">No OPT/FOP positions found in TWS.</div>';
+                return;
+            }
+
+            let html = '<table style="width:100%"><thead><tr><th>Select</th><th>Account</th><th>ConId</th><th>Symbol</th><th>Strike</th><th>Right</th><th>Expiry</th><th>TWS Qty</th><th>Custom Qty</th><th>Cost Basis</th></tr></thead><tbody>';
+            data.positions.forEach(p => {
+                const searchStr = `${p.symbol} ${p.strike} ${p.expiry} ${p.account} ${p.conId}`.toLowerCase();
+                html += `
+                    <tr class="leg-row" data-search="${searchStr}">
+                        <td style="text-align:center"><input type="checkbox" class="leg-check" data-conid="${p.conId}"></td>
+                        <td style="font-size:12px; color:var(--text-muted)">${p.account || 'Unknown'}</td>
+                        <td style="font-family:monospace">${p.conId}</td>
+                        <td>${p.symbol}</td>
+                        <td style="text-align:right">${p.strike}</td>
+                        <td style="text-align:center">${p.right}</td>
+                        <td style="text-align:center">${p.expiry}</td>
+                        <td style="text-align:center">${p.position}</td>
+                        <td style="text-align:center"><input type="number" class="leg-qty" value="${p.position}" style="width:60px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: white; padding: 4px; border-radius: 4px;"></td>
+                        <td style="text-align:right"><input type="number" step="0.01" class="leg-cb" placeholder="0.00" style="width:80px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); color: white; padding: 4px; border-radius: 4px;"></td>
+                    </tr>
+                `;
+            });
+            html += '</tbody></table>';
+            rawPosContainer.innerHTML = html;
+            
+            // Re-apply filter if needed
+            if(legSearchInput) legSearchInput.dispatchEvent(new Event('input'));
+        } catch (e) {
+            rawPosContainer.innerHTML = `<div style="color:var(--danger); padding:20px;">Request failed: ${e}</div>`;
+        }
+    }
+
+    if (legSearchInput) {
+        legSearchInput.addEventListener('input', (e) => {
+            const term = e.target.value.toLowerCase();
+            const rows = rawPosContainer.querySelectorAll('tbody tr.leg-row');
+            rows.forEach(row => {
+                const searchData = row.getAttribute('data-search');
+                if (searchData.includes(term)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        });
+    }
+
+    if (btnSaveCombo) {
+        btnSaveCombo.addEventListener('click', async () => {
+            const name = comboNameInput.value.trim();
+            const group = comboGroupInput ? comboGroupInput.value.trim() || 'Default' : 'Default';
+            if (!name) return alert("Please enter a combo name");
+
+            const rows = rawPosContainer.querySelectorAll('tbody tr');
+            const legs = [];
+            
+            rows.forEach(row => {
+                const cbx = row.querySelector('.leg-check');
+                if (cbx && cbx.checked) {
+                    const conId = cbx.getAttribute('data-conid');
+                    const qty = row.querySelector('.leg-qty').value;
+                    const cb = row.querySelector('.leg-cb').value;
+                    legs.push({
+                        conId: parseInt(conId),
+                        qty: parseFloat(qty),
+                        costBasis: parseFloat(cb) || 0
+                    });
+                }
+            });
+
+            if (legs.length === 0) return alert("Please select at least one leg");
+
+            const payload = {
+                name: name,
+                group: group,
+                legs: legs
+            };
+
+            btnSaveCombo.disabled = true;
+            btnSaveCombo.textContent = 'Saving...';
+
+            try {
+                const res = await fetch('/api/save_combo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                
+                if (data.ok) {
+                    closeModal();
+                    fetchCombos(); // refresh the combos list
+                } else {
+                    alert('Failed to save combo: ' + data.error);
+                }
+            } catch (e) {
+                alert('Request failed');
+            } finally {
+                btnSaveCombo.disabled = false;
+                btnSaveCombo.textContent = 'Save Combo';
+            }
+        });
+    }
 
     // Load accounts initially
     loadAccounts();

@@ -94,13 +94,32 @@ def api_portfolio():
     except concurrent.futures.TimeoutError:
         return jsonify({"ok": False, "error": "Portfolio fetch timed out"}), 504
 
-@app.route("/api/manual_portfolio", methods=["GET"])
-def api_manual_portfolio():
+@app.route("/api/manual_combos", methods=["GET"])
+def api_manual_combos():
     future = _combos_executor.submit(manual_portfolio.get_combo_data)
     try:
         return jsonify(future.result(timeout=60))
     except concurrent.futures.TimeoutError:
         return jsonify({"ok": False, "error": "Combo fetch timed out"}), 504
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/raw_positions", methods=["GET"])
+def api_raw_positions():
+    future = _combos_executor.submit(manual_portfolio.get_raw_positions)
+    try:
+        return jsonify(future.result(timeout=60))
+    except concurrent.futures.TimeoutError:
+        return jsonify({"ok": False, "error": "Raw positions fetch timed out"}), 504
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/save_combo", methods=["POST"])
+def api_save_combo():
+    data = request.json
+    try:
+        manual_portfolio.save_combo(data)
+        return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
