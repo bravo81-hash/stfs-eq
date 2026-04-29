@@ -38,8 +38,10 @@ and right-click → Transmits in TWS — no auto-execution ever.
 | `regime.py` | Auto-regime detection (drift/vol/term/skew/credit/event + sector RRG). |
 | `tws_data.py` | TWS API calls: OHLC, IVP, live price, options chain, index feeds. clientId=15 (readonly). |
 | `order_server.py` | HTTP order API. clientId=16 (read-write). localhost:5001. |
-| `portfolio_manager.py` | Portfolio monitor (clientId=18) |
+| `portfolio_manager.py` | Portfolio monitor (clientId=18) — STFS-EQ positions only |
 | `trailing_stop_manager.py` | Stop daemon (clientId=17) |
+| `manual_portfolio.py` | Discretionary combo tracker (clientId=19) — SPX/RUT/ES; reads `manual_combos.yaml` |
+| `manual_combos.yaml` | Combo definitions: legs with exact fill prices. Edit this to add/remove trades. |
 | `backtest.py` | Standalone CLI backtester (in-sample diagnostic). Imports indicators from `indicators.py`. |
 | `indicators.py` | **Single source of truth** for the 8-factor scoring rules. `compute_factors()` is called by both live signal (`score_ticker`) and the walk-forward mini-backtest — eliminates drift. |
 | `journal.py` | Journal writer. |
@@ -64,6 +66,8 @@ what was done rather than what the system does. Those rot immediately and mislea
 - `clientId=16` — order_server.py, read-write, order placement
 - `clientId=17` — trailing_stop_manager.py, read-write, stop modification (auto-transmit)
 - `clientId=18` — portfolio_manager.py, read-only, portfolio monitoring
+
+- `clientId=19` — manual_portfolio.py, read-only, discretionary combo monitoring
 
 These must not clash. If you add another IB connection anywhere, pick a different ID.
 
@@ -246,6 +250,7 @@ SPREAD_ATR_MULT  = 2.0  # options spread width = 2×ATR
 - The `_TWS_TICKER` alias maps in both tws_data.py and order_server.py
 - `_DIAGONAL_STRUCTURES` separate from `_CREDIT_STRUCTURES` — diagonal uses net_debit (not net_credit), 50% gain target (not credit-capture logic)
 - Financial fields in journal (net_debit/net_credit/max_loss_per_contract/target_value) — removing breaks portfolio P&L signals
+- `manual_portfolio.py` is fully isolated — never import from it in dashboard/order_server/portfolio_manager. It owns its own TWS connection (clientId=19) and reads only `manual_combos.yaml`.
 
 ---
 

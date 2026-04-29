@@ -1,0 +1,33 @@
+# manual_combos.yaml — Discretionary options combo definitions
+# Used by manual_portfolio.py. Never touched by STFS-EQ order flow.
+#
+# Fields per leg:
+#   symbol       : Underlying (SPX, RUT, ES, AAPL …)
+#   right        : C or P
+#   strike       : Strike price (numeric)
+#   expiry       : YYYY-MM-DD
+#   qty          : Signed — positive = long, negative = short
+#   fill         : Your exact fill price per contract (before multiplier)
+#   exchange     : CBOE for SPX/RUT index options; CME for ES; SMART for equities
+#   multiplier   : 100 for SPX/RUT/equity options; 50 for ES futures options
+#   sectype      : OPT (default) for index/equity options; FOP for futures options (ES)
+#   trading_class: Optional — set to SPXW for SPX weeklies if TWS can't qualify
+
+combos:
+
+  - name: "SPX MAY IC"
+    legs:
+      - {symbol: SPX, right: C, strike: 5900, expiry: "2025-05-16", qty: -1, fill:  8.50, exchange: CBOE, multiplier: 100}
+      - {symbol: SPX, right: C, strike: 5950, expiry: "2025-05-16", qty:  1, fill:  4.20, exchange: CBOE, multiplier: 100}
+      - {symbol: SPX, right: P, strike: 5400, expiry: "2025-05-16", qty: -1, fill:  7.80, exchange: CBOE, multiplier: 100}
+      - {symbol: SPX, right: P, strike: 5350, expiry: "2025-05-16", qty:  1, fill:  4.10, exchange: CBOE, multiplier: 100}
+
+  - name: "RUT CALENDARS"
+    legs:
+      - {symbol: RUT, right: P, strike: 2050, expiry: "2025-05-02", qty: -1, fill: 18.40, exchange: CBOE, multiplier: 100}
+      - {symbol: RUT, right: P, strike: 2050, expiry: "2025-05-16", qty:  1, fill: 24.70, exchange: CBOE, multiplier: 100}
+
+  - name: "ES JUN STRANGLE"
+    legs:
+      - {symbol: ES, right: C, strike: 6000, expiry: "2025-06-20", qty: -1, fill: 35.00, exchange: CME, multiplier: 50, sectype: FOP}
+      - {symbol: ES, right: P, strike: 5400, expiry: "2025-06-20", qty: -1, fill: 22.50, exchange: CME, multiplier: 50, sectype: FOP}
