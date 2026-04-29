@@ -101,6 +101,8 @@ def api_manual_portfolio():
         return jsonify(future.result(timeout=60))
     except concurrent.futures.TimeoutError:
         return jsonify({"ok": False, "error": "Combo fetch timed out"}), 504
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 # ── API: Trailing Stop Daemon Control ─────────────────────────────────────────
 
