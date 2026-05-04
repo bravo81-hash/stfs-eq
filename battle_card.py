@@ -1553,6 +1553,7 @@ def _order_json(r: dict) -> str:
         "rs_pct":         r.get("rs_pct"),
         "rsi":            r.get("rsi"),
         "adx":            r.get("adx"),
+        "atr":            r.get("atr"),
         "atr_pct":        r.get("atr_pct"),
         "momentum_bonus": r.get("momentum_bonus"),
         "earnings_date":  r.get("earnings_date"),

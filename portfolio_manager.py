@@ -204,6 +204,83 @@ def _get_mark(ib, contract) -> float | None:
         return None
 
 
+def _expiry_key(expiry: str | None) -> str:
+    if not expiry:
+        return ""
+    return expiry.replace("-", "")
+
+
+def _leg_key(right: str, expiry: str | None, strike: float | int | None) -> tuple[str, str, float]:
+    return (str(right), _expiry_key(expiry), float(strike or 0.0))
+
+
+def _net_option_mark(order: dict, leg_marks: dict[tuple[str, str, float], float]) -> float | None:
+    """Return net option/spread mark in order-server price units.
+
+    Debit structures use current liquidation value. Credit spreads use current
+    cost to close, matching _signal_pnl's mark convention.
+    """
+    structure = order.get("structure")
+    expiry = order.get("expiry")
+    expiry_front = order.get("expiry_front")
+    long_strike = order.get("long_strike")
+    short_strike = order.get("short_strike")
+
+    if structure == "long_call":
+        return leg_marks.get(_leg_key("C", expiry, long_strike))
+
+    if structure == "debit_spread":
+        long_mark = leg_marks.get(_leg_key("C", expiry, long_strike))
+        short_mark = leg_marks.get(_leg_key("C", expiry, short_strike))
+        if long_mark is None or short_mark is None:
+            return None
+        return round(long_mark - short_mark, 4)
+
+    if structure == "credit_spread":
+        long_mark = leg_marks.get(_leg_key("P", expiry, long_strike))
+        short_mark = leg_marks.get(_leg_key("P", expiry, short_strike))
+        if long_mark is None or short_mark is None:
+            return None
+        return round(short_mark - long_mark, 4)
+
+    if structure == "diagonal":
+        long_mark = leg_marks.get(_leg_key("C", expiry, long_strike))
+        short_mark = leg_marks.get(_leg_key("C", expiry_front, short_strike))
+        if long_mark is None or short_mark is None:
+            return None
+        return round(long_mark - short_mark, 4)
+
+    return None
+
+
+def _row_contracts(row: dict) -> int:
+    positions = row.get("positions") or [row["position"]]
+    vals = [int(abs(getattr(pos, "position", 0))) for pos in positions]
+    return max(vals) if vals else 0
+
+
+def _row_mark(ib, row: dict) -> float | None:
+    order = row["journal"].get("order", {})
+    positions = row.get("positions") or [row["position"]]
+
+    if order.get("type") == "shares" or order.get("structure") == "long_call":
+        return _get_mark(ib, positions[0].contract)
+
+    leg_marks = {}
+    for pos in positions:
+        contract = pos.contract
+        mark = _get_mark(ib, contract)
+        if mark is None:
+            continue
+        leg_marks[_leg_key(
+            contract.right,
+            contract.lastTradeDateOrContractMonth,
+            contract.strike,
+        )] = mark
+
+    return _net_option_mark(order, leg_marks)
+
+
 def _underlying_price(ib, ticker: str) -> float | None:
     """Live underlying price via 1-min bar."""
     try:
@@ -228,8 +305,7 @@ def _match_positions_to_journal(positions, journal: dict[str, dict]) -> list[dic
     """Match live positions to journal entries by ticker + account + leg details.
     One row per orderRef — deduplicates multi-leg structures (e.g. diagonal with 2 OPT legs).
     """
-    rows = []
-    seen_refs: set[str] = set()
+    rows_by_ref: dict[str, dict] = {}
     for pos in positions:
         if pos.contract.secType not in ("OPT", "BAG", "STK"):
             continue
@@ -255,8 +331,8 @@ def _match_positions_to_journal(positions, journal: dict[str, dict]) -> list[dic
                 j_exp = (order.get("expiry") or "").replace("-", "")
                 j_exp_f = (order.get("expiry_front") or "").replace("-", "")
 
-                # Broad match: if strikes or expiry match either leg, it belongs to this journaled trade
-                if (p_strike in (j_long_s, j_short_s)) or (p_expiry in (j_exp, j_exp_f)):
+                # Match one of this journaled trade's exact option legs.
+                if (p_strike in (j_long_s, j_short_s)) and (p_expiry in (j_exp, j_exp_f)):
                     best_rec = rec
                     best_ref = ref
                     break
@@ -266,10 +342,13 @@ def _match_positions_to_journal(positions, journal: dict[str, dict]) -> list[dic
                 best_ref = ref
                 break
 
-        if best_rec and best_ref not in seen_refs:
-            seen_refs.add(best_ref)
-            rows.append({"position": pos, "journal": best_rec})
-    return rows
+        if best_rec:
+            key = best_ref or f"{ticker}:{account}:{id(best_rec)}"
+            if key not in rows_by_ref:
+                rows_by_ref[key] = {"position": pos, "positions": [pos], "journal": best_rec}
+            else:
+                rows_by_ref[key]["positions"].append(pos)
+    return list(rows_by_ref.values())
 
 
 # ── display ───────────────────────────────────────────────────────────────────
@@ -299,8 +378,8 @@ def get_portfolio_data() -> dict:
             account = rec.get("account", pos.account)
             structure = order.get("structure", "?")
             
-            # Fetch mark
-            mark = _get_mark(ib, pos.contract)
+            # Fetch mark. Multi-leg option rows use net spread/diagonal mark.
+            mark = _row_mark(ib, row)
             
             # DTE
             expiry_str = order.get("expiry", "")
@@ -326,7 +405,7 @@ def get_portfolio_data() -> dict:
                     structure=structure, mark=mark,
                     net_debit=order.get("net_debit"), net_credit=order.get("net_credit"),
                     max_loss_per_contract=order.get("max_loss_per_contract", 0),
-                    contracts=order.get("contracts", int(abs(pos.position)))
+                    contracts=order.get("contracts", _row_contracts(row))
                 )
                 if trig: signals.append(reason)
                 
@@ -349,11 +428,13 @@ def get_portfolio_data() -> dict:
                     pnl = (mark - entry_px) / entry_px * 100
                     pnl_str = f"{pnl:+.1f}%"
                 elif (net_debit := order.get("net_debit")) and net_debit > 0:
-                    pnl = (mark * 100 * abs(pos.position) - net_debit * 100 * abs(pos.position)) / (net_debit * 100 * abs(pos.position)) * 100
+                    contracts = _row_contracts(row)
+                    pnl = (mark * 100 * contracts - net_debit * 100 * contracts) / (net_debit * 100 * contracts) * 100
                     pnl_str = f"{pnl:+.0f}%"
                 elif (net_credit := order.get("net_credit")) and net_credit > 0:
                     max_loss = order.get("max_loss_per_contract", 0)
-                    pnl = (net_credit * 100 * abs(pos.position) - mark * 100 * abs(pos.position)) / (max_loss * abs(pos.position)) * 100
+                    contracts = _row_contracts(row)
+                    pnl = (net_credit * 100 * contracts - mark * 100 * contracts) / (max_loss * contracts) * 100
                     pnl_str = f"{pnl:+.0f}%"
 
             data.append({
@@ -386,7 +467,7 @@ def _render_table(rows, ib):
         net_debit = order.get("net_debit")
         net_credit = order.get("net_credit")
         max_loss  = order.get("max_loss_per_contract", 0)
-        contracts = order.get("contracts", int(abs(pos.position)))
+        contracts = order.get("contracts", _row_contracts(row))
         expiry_str = order.get("expiry", "")
         limit_px  = order.get("limit_price", 0)
 
@@ -396,7 +477,7 @@ def _render_table(rows, ib):
         except Exception:
             dte = -1
 
-        mark = _get_mark(ib, pos.contract)
+        mark = _row_mark(ib, row)
         mark_str = f"${mark:.2f}" if mark else "STALE"
 
         pnl_str = "?"
