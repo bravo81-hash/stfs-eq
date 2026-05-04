@@ -102,6 +102,29 @@ def _realized_r(entry: dict, exit_price: float, result: str) -> float | None:
     Returns None when prices can't be determined.
     """
     order = entry.get("order", {})
+
+    if order.get("type") == "options":
+        structure = order.get("structure")
+        max_loss_per_contract = order.get("max_loss_per_contract")
+        try:
+            risk_per_share = float(max_loss_per_contract) / 100.0
+        except Exception:
+            risk_per_share = 0.0
+        if risk_per_share <= 0 or exit_price < 0:
+            return None
+
+        if structure == "credit_spread":
+            net_credit = order.get("net_credit") or order.get("limit_price")
+            if not net_credit:
+                return None
+            profit_per_share = float(net_credit) - exit_price
+        else:
+            net_debit = order.get("net_debit") or order.get("limit_price")
+            if not net_debit:
+                return None
+            profit_per_share = exit_price - float(net_debit)
+        return round(profit_per_share / risk_per_share, 3)
+
     entry_px = order.get("entry") or order.get("limit_price")
     stop_px  = order.get("stop")
 
@@ -123,6 +146,22 @@ def _hit_result(exit_price: float, entry: dict, forced: str | None) -> str:
     if forced:
         return forced
     order = entry.get("order", {})
+    if order.get("type") == "options":
+        structure = order.get("structure")
+        target_value = order.get("target_value")
+        if structure == "credit_spread":
+            if target_value and exit_price <= float(target_value) * 1.03:
+                return "target"
+            max_loss = order.get("max_loss_per_contract")
+            if max_loss and exit_price >= (float(max_loss) / 100.0) * C.OPT_PNL_STOP_PCT:
+                return "stop"
+        else:
+            if target_value and exit_price >= float(target_value) * 0.97:
+                return "target"
+            net_debit = order.get("net_debit") or order.get("limit_price")
+            if net_debit and exit_price <= float(net_debit) * (1.0 - C.OPT_PNL_STOP_PCT):
+                return "stop"
+        return "partial"
     target = order.get("target")
     stop   = order.get("stop")
     if target and exit_price >= float(target) * 0.97:

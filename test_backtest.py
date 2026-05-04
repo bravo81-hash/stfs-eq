@@ -19,6 +19,7 @@ def _arrays(n, price, atr_val, sb_indices, lo_override=None, hi_override=None,
     op_a  = np.full(n, price, dtype=float)
     hi_a  = np.full(n, price * 1.02, dtype=float)
     lo_a  = np.full(n, price * 0.98, dtype=float)
+    tm_a  = np.zeros(n, dtype=float)
     for override in (lo_override, lo_override_extra):
         if override:
             for idx, val in override.items():
@@ -29,7 +30,7 @@ def _arrays(n, price, atr_val, sb_indices, lo_override=None, hi_override=None,
     if op_override:
         for idx, val in op_override.items():
             op_a[idx] = val
-    return sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a
+    return sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, tm_a
 
 
 def test_commission_is_fraction_of_notional():
@@ -45,14 +46,14 @@ def test_commission_is_fraction_of_notional():
     target_d = C.TARGET_ATR_MULT * atr_val  # 8.0
     target = entry + target_d
 
-    sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a = _arrays(
+    sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, tm_a = _arrays(
         n + 1, price, atr_val, sb_indices=[0],
         lo_override={2: limit - 0.5},          # bar 2 low triggers limit (checked when i=1)
         hi_override={3: target + 0.5},         # bar 3 high triggers target (checked when i=2)
     )
 
     df = pd.DataFrame(index=range(n + 1))  # +1 because loop checks len(df)-1
-    trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, 0, n)
+    trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, tm_a, 0, n)
     assert len(trades) == 1, f"Expected 1 trade, got {len(trades)}"
 
     exit_eff = target * (1 - slip)             # exit is a win → slip worsens fill
@@ -80,7 +81,7 @@ def test_gap_down_stop_fills_at_open():
     gap_open = 90.0  # Opens below stop
     n = 5
 
-    sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a = _arrays(
+    sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, tm_a = _arrays(
         n, price, atr_val, sb_indices=[0],
         lo_override={2: limit - 0.5},       # Bar 2 low triggers limit (checked when i=1)
         op_override={3: gap_open},          # Bar 3 opens below stop
@@ -88,7 +89,7 @@ def test_gap_down_stop_fills_at_open():
     )
 
     df = pd.DataFrame(index=range(n))
-    trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, 0, n - 1)
+    trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, tm_a, 0, n - 1)
     assert len(trades) == 1, f"Expected 1 trade, got {len(trades)}"
 
     # Gap-down exit: fill at gap_open with adverse slippage
@@ -117,7 +118,7 @@ def test_gap_up_target_fills_at_open():
     gap_open = 110.0  # Opens above target
     n = 5
 
-    sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a = _arrays(
+    sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, tm_a = _arrays(
         n, price, atr_val, sb_indices=[0],
         lo_override={2: limit - 0.5},       # Bar 2 low triggers limit (checked when i=1)
         op_override={3: gap_open},          # Bar 3 opens above target
@@ -125,7 +126,7 @@ def test_gap_up_target_fills_at_open():
     )
 
     df = pd.DataFrame(index=range(n))
-    trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, 0, n - 1)
+    trades = _simulate(df, sb_a, brk_a, cl_a, at_a, op_a, hi_a, lo_a, tm_a, 0, n - 1)
     assert len(trades) == 1, f"Expected 1 trade, got {len(trades)}"
 
     # Gap-up exit: fill at gap_open with favorable slippage

@@ -38,38 +38,44 @@ f_get_crypto(sym) =>
 [p_xlre, m_xlre, t_xlre] = f_get_stock("XLRE")
 [p_xhb, m_xhb, t_xhb] = f_get_stock("XHB")
 [p_btc, m_btc, t_btc] = f_get_crypto("CRYPTO:BTCUSD") // Explicit Crypto fetch
+[p_spy, m_spy, t_spy] = f_get_stock("SPY") // RRG benchmark
 
 // ==========================================
 // 3. RRG CALCULATION
 // ==========================================
-f_calc_rrg(now, mom, trend) =>
-    if na(now) or na(mom) or na(trend) or mom == 0 or trend == 0
-        [0.0, 0.0]
+f_calc_rrg(now, mom, trend, bench_now, bench_mom, bench_trend) =>
+    if na(now) or na(mom) or na(trend) or na(bench_now) or na(bench_mom) or na(bench_trend) or now == 0 or mom == 0 or trend == 0 or bench_now == 0 or bench_mom == 0 or bench_trend == 0
+        [na, na]
     else
-        x = ((now - trend) / trend) * 100
-        y = ((now - mom) / mom) * 100
+        rs_now = now / bench_now
+        rs_mom = mom / bench_mom
+        rs_trend = trend / bench_trend
+        x = ((rs_now - rs_trend) / rs_trend) * 100
+        y = ((rs_now - rs_mom) / rs_mom) * 100
         [x, y]
 
-[x_xlk, y_xlk] = f_calc_rrg(p_xlk, m_xlk, t_xlk)
-[x_smh, y_smh] = f_calc_rrg(p_smh, m_smh, t_smh)
-[x_xlf, y_xlf] = f_calc_rrg(p_xlf, m_xlf, t_xlf)
-[x_xle, y_xle] = f_calc_rrg(p_xle, m_xle, t_xle)
-[x_xlv, y_xlv] = f_calc_rrg(p_xlv, m_xlv, t_xlv)
-[x_xli, y_xli] = f_calc_rrg(p_xli, m_xli, t_xli)
-[x_xlb, y_xlb] = f_calc_rrg(p_xlb, m_xlb, t_xlb)
-[x_xlu, y_xlu] = f_calc_rrg(p_xlu, m_xlu, t_xlu)
-[x_xlp, y_xlp] = f_calc_rrg(p_xlp, m_xlp, t_xlp)
-[x_xly, y_xly] = f_calc_rrg(p_xly, m_xly, t_xly)
-[x_xlc, y_xlc] = f_calc_rrg(p_xlc, m_xlc, t_xlc)
-[x_xlre, y_xlre] = f_calc_rrg(p_xlre, m_xlre, t_xlre)
-[x_xhb, y_xhb] = f_calc_rrg(p_xhb, m_xhb, t_xhb)
-[x_btc, y_btc] = f_calc_rrg(p_btc, m_btc, t_btc)
+[x_xlk, y_xlk] = f_calc_rrg(p_xlk, m_xlk, t_xlk, p_spy, m_spy, t_spy)
+[x_smh, y_smh] = f_calc_rrg(p_smh, m_smh, t_smh, p_spy, m_spy, t_spy)
+[x_xlf, y_xlf] = f_calc_rrg(p_xlf, m_xlf, t_xlf, p_spy, m_spy, t_spy)
+[x_xle, y_xle] = f_calc_rrg(p_xle, m_xle, t_xle, p_spy, m_spy, t_spy)
+[x_xlv, y_xlv] = f_calc_rrg(p_xlv, m_xlv, t_xlv, p_spy, m_spy, t_spy)
+[x_xli, y_xli] = f_calc_rrg(p_xli, m_xli, t_xli, p_spy, m_spy, t_spy)
+[x_xlb, y_xlb] = f_calc_rrg(p_xlb, m_xlb, t_xlb, p_spy, m_spy, t_spy)
+[x_xlu, y_xlu] = f_calc_rrg(p_xlu, m_xlu, t_xlu, p_spy, m_spy, t_spy)
+[x_xlp, y_xlp] = f_calc_rrg(p_xlp, m_xlp, t_xlp, p_spy, m_spy, t_spy)
+[x_xly, y_xly] = f_calc_rrg(p_xly, m_xly, t_xly, p_spy, m_spy, t_spy)
+[x_xlc, y_xlc] = f_calc_rrg(p_xlc, m_xlc, t_xlc, p_spy, m_spy, t_spy)
+[x_xlre, y_xlre] = f_calc_rrg(p_xlre, m_xlre, t_xlre, p_spy, m_spy, t_spy)
+[x_xhb, y_xhb] = f_calc_rrg(p_xhb, m_xhb, t_xhb, p_spy, m_spy, t_spy)
+[x_btc, y_btc] = f_calc_rrg(p_btc, m_btc, t_btc, p_spy, m_spy, t_spy)
 
 // ==========================================
 // 4. LOGIC & CONTEXT
 // ==========================================
 f_quad_info(x, y) =>
-    if x > 0 and y > 0
+    if na(x) or na(y)
+        ["MISSING", "NO DATA", color.gray]
+    else if x > 0 and y > 0
         ["LEADING", "BULLISH", color.lime]
     else if x < 0 and y > 0
         ["IMPROVING", "ACCUM", color.aqua]
@@ -187,7 +193,7 @@ if barstate.islast
         trend_txt = na(s.trend) ? "---" : str.tostring(s.trend, "#.1") + "%"
         
         table.cell(t, 0 + col_off, row_idx, s.name, text_color=c_txt, text_halign=text.align_left, text_size=text_size)
-        table.cell(t, 1 + col_off, row_idx, mom_txt, text_color=s.mom > 0 ? color.new(color.lime, fade) : color.new(color.red, fade), text_size=text_size)
-        table.cell(t, 2 + col_off, row_idx, trend_txt, text_color=s.trend > 0 ? color.new(color.lime, fade) : color.new(color.red, fade), text_size=text_size)
+        table.cell(t, 1 + col_off, row_idx, mom_txt, text_color=na(s.mom) ? color.new(color.gray, fade) : s.mom > 0 ? color.new(color.lime, fade) : color.new(color.red, fade), text_size=text_size)
+        table.cell(t, 2 + col_off, row_idx, trend_txt, text_color=na(s.trend) ? color.new(color.gray, fade) : s.trend > 0 ? color.new(color.lime, fade) : color.new(color.red, fade), text_size=text_size)
         table.cell(t, 3 + col_off, row_idx, s.phase, text_color=c_val, text_size=text_size, text_halign=text.align_center)
         table.cell(t, 4 + col_off, row_idx, s.action, bgcolor=color.new(s.c, 70 + (fade/4)), text_color=color.white, text_size=text_size, text_halign=text.align_center)
